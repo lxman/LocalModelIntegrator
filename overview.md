@@ -28,7 +28,7 @@ This extension is deliberately conservative about your source:
 
 ## Requirements
 
-- Visual Studio 2022 (17.x or later).
+- Visual Studio 2026 (version 18).
 - An OpenAI-compatible chat-completions endpoint — local (Ollama, LM Studio, vLLM, …) or remote.
 
 Source and issues: https://github.com/lxman/LocalModelIntegrator

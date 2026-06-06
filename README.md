@@ -1,6 +1,6 @@
 # Local Model Integrator
 
-A Visual Studio 2022 extension that turns any OpenAI-compatible model — local or remote — into a **code-aware, read-only assistant** scoped strictly to your open solution.
+A Visual Studio 2026 extension that turns any OpenAI-compatible model — local or remote — into a **code-aware, read-only assistant** scoped strictly to your open solution.
 
 Point it at your own endpoint (Ollama, LM Studio, vLLM, or the OpenAI API). It reads only the currently-open solution, shows you exactly where your code is being sent, and suggests changes in chat for you to apply by hand. It never writes to your files.
 
@@ -27,7 +27,7 @@ Most in-IDE AI assistants assume a specific cloud provider and send your code th
 
 ## Requirements
 
-- Visual Studio 2022 (17.x or later).
+- Visual Studio 2026 (version 18).
 - An OpenAI-compatible chat-completions endpoint (e.g. Ollama, LM Studio, vLLM, or `api.openai.com`).
 
 ## Install
