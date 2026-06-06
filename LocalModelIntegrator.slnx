@@ -1,0 +1,6 @@
+
+<Solution>
+  <Project Path="src\LocalModelIntegrator\LocalModelIntegrator.csproj">
+    <Deploy Solution="Debug|*" />
+  </Project>
+</Solution>

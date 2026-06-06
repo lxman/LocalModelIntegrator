@@ -1,0 +1,82 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vsui="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0">
+
+    <!-- All text adapts to the active VS theme (dark/light/blue) at runtime. -->
+    <Style TargetType="TextBlock">
+        <Setter Property="Foreground"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"/>
+    </Style>
+
+    <!-- Input box uses themed text/background/caret instead of the default white box. -->
+    <Style TargetType="TextBox">
+        <Setter Property="Foreground"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"/>
+        <Setter Property="Background"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.ComboBoxBackgroundBrushKey}}"/>
+        <Setter Property="CaretBrush"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"/>
+        <Setter Property="BorderBrush"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarBorderBrushKey}}"/>
+    </Style>
+
+    <Style x:Key="MessageBorderStyle" TargetType="Border">
+        <Setter Property="BorderBrush"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarBorderBrushKey}}"/>
+    </Style>
+
+    <Style x:Key="MessageContentStyle" TargetType="TextBlock"
+           BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Style.Triggers>
+            <!-- Reasoning/thinking content is de-emphasized so it reads as separate from the answer. -->
+            <DataTrigger Binding="{Binding Role}" Value="thinking">
+                <Setter Property="FontStyle" Value="Italic"/>
+                <Setter Property="Foreground"
+                        Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarTextInactiveBrushKey}}"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Read-only, borderless, transparent TextBox so message text is SELECTABLE and copyable.
+         (WPF TextBlock can't select text, and TextBlock.IsTextSelectionEnabled isn't available on
+         net472.) Keyed + no BasedOn so it does NOT pick up the input-box background/border above. -->
+    <Style x:Key="SelectableContentStyle" TargetType="TextBox">
+        <Setter Property="IsReadOnly" Value="True"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+        <Setter Property="Foreground"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"/>
+        <Style.Triggers>
+            <!-- Reasoning/thinking content is de-emphasized so it reads as separate from the answer. -->
+            <DataTrigger Binding="{Binding Role}" Value="thinking">
+                <Setter Property="FontStyle" Value="Italic"/>
+                <Setter Property="Foreground"
+                        Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarTextInactiveBrushKey}}"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Compact, monospaced, de-emphasized row for an agent tool action (e.g. "read Foo.cs"). -->
+    <Style x:Key="ToolRowStyle" TargetType="TextBlock"
+           BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="FontFamily" Value="Consolas"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Foreground"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarTextInactiveBrushKey}}"/>
+    </Style>
+
+    <!-- Role label: themed but de-emphasized so it reads as a caption above each message. -->
+    <Style x:Key="RoleLabelStyle" TargetType="TextBlock"
+           BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="Foreground"
+                Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarTextInactiveBrushKey}}"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="FontSize" Value="10"/>
+    </Style>
+</ResourceDictionary>
