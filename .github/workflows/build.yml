@@ -2,10 +2,10 @@ name: Build & Publish
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
     tags: [ 'v*' ]      # pushing a vX.Y.Z tag builds AND publishes to the Marketplace
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +17,7 @@ jobs:
     env:
       PROJECT: src/LocalModelIntegrator/LocalModelIntegrator.csproj
       CONFIGURATION: Release
+      VS_MARKETPLACE_PAT: ${{ secrets.VS_MARKETPLACE_PAT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,11 +44,28 @@ jobs:
           name: LocalModelIntegrator
           path: ${{ steps.vsix.outputs.path }}
 
-      # On a vX.Y.Z tag, attach the built VSIX to a GitHub Release. Download it from the Releases
-      # page and upload it by hand at https://marketplace.visualstudio.com/manage
-      # (Marketplace auto-publish needs an Azure DevOps PAT, which isn't available here.)
+      # On a vX.Y.Z tag, attach the built VSIX to a GitHub Release for direct download.
       - name: Attach VSIX to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.vsix.outputs.path }}
+
+      # On a vX.Y.Z tag, publish to the Visual Studio Marketplace via VsixPublisher.
+      # Requires the repo secret VS_MARKETPLACE_PAT (Azure DevOps PAT, scope: Marketplace > Manage,
+      # all accessible organizations). Skipped automatically if the secret is absent.
+      - name: Publish to VS Marketplace
+        if: startsWith(github.ref, 'refs/tags/v') && env.VS_MARKETPLACE_PAT != ''
+        shell: pwsh
+        run: |
+          $installPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $publisher = Join-Path $installPath "VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe"
+          if (-not (Test-Path $publisher)) {
+            $publisher = (Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Filter VsixPublisher.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if (-not $publisher) { throw "VsixPublisher.exe not found on the runner." }
+          Write-Host "Using $publisher"
+          & $publisher publish `
+            -payload "${{ steps.vsix.outputs.path }}" `
+            -publishManifest "publishManifest.json" `
+            -personalAccessToken $env:VS_MARKETPLACE_PAT

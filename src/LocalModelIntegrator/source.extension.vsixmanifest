@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="LocalModelIntegrator.18.Community.08cd0e80-6539-4a2c-80d9-c876c1f36cd4" Version="1.0.0" Language="en-US" Publisher="Michael Jordan"/>
+    <Identity Id="LocalModelIntegrator.aab45773-7865-45dc-80de-bfc8cf97357b" Version="1.0.0" Language="en-US" Publisher="Michael Jordan (lxman)"/>
     <DisplayName>Local Model Integrator</DisplayName>
     <Description xml:space="preserve">Chat with locally-hosted or remote AI models directly inside Visual Studio. Supports OpenAI-compatible endpoints, Ollama, and custom model APIs.</Description>
     <MoreInfo>https://github.com/lxman/LocalModelIntegrator</MoreInfo>
@@ -11,7 +11,7 @@
     <Tags>AI, LLM, Chat, Local, OpenAI, Ollama, DeepSeek</Tags>
   </Metadata>
   <Installation>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[18.0,19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
@@ -19,7 +19,7 @@
     <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" Version="[4.7.2,)" />
   </Dependencies>
   <Prerequisites>
-    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[18.0,19.0)" DisplayName="Visual Studio core editor" />
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.14,)" DisplayName="Visual Studio core editor" />
   </Prerequisites>
   <Assets>
     <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
