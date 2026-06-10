@@ -33,6 +33,11 @@ namespace LocalModelIntegrator.Services
         public string Error { get; set; }
         public string Report { get; set; }        // human-readable multi-line summary
 
+        // How the endpoint was actually spoken to (manual selection or auto-detection).
+        public string DialectId { get; set; }
+        public string DialectEvidence { get; set; }
+        public string ResolvedEndpoint { get; set; }
+
         // What this snapshot was taken against (for session caching / staleness checks).
         public string ProbedUrl { get; set; }
         public string ProbedModel { get; set; }

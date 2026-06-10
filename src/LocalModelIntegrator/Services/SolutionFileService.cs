@@ -101,7 +101,7 @@ namespace LocalModelIntegrator.Services
                 return _cache;
 
             var result = new List<SolutionFileInfo>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // display id -> absolute path
 
             ThreadHelper.JoinableTaskFactory.Run(async () =>
             {
@@ -218,7 +218,7 @@ namespace LocalModelIntegrator.Services
             return c != null && ScopeSet().Contains(c);
         }
 
-        private void CollectProject(EnvProject project, List<SolutionFileInfo> result, HashSet<string> seen)
+        private void CollectProject(EnvProject project, List<SolutionFileInfo> result, Dictionary<string, string> seen)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (project == null || result.Count >= MaxListedFiles)
@@ -268,7 +268,7 @@ namespace LocalModelIntegrator.Services
         }
 
         private void CollectItem(EnvProjectItem item, string projectName, string projectDir,
-            List<SolutionFileInfo> result, HashSet<string> seen)
+            List<SolutionFileInfo> result, Dictionary<string, string> seen)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (item == null || result.Count >= MaxListedFiles)
@@ -304,7 +304,7 @@ namespace LocalModelIntegrator.Services
         }
 
         private void AddFile(string path, string projectName, string projectDir,
-            List<SolutionFileInfo> result, HashSet<string> seen)
+            List<SolutionFileInfo> result, Dictionary<string, string> seen)
         {
             if (string.IsNullOrEmpty(path) || result.Count >= MaxListedFiles)
                 return;
@@ -313,9 +313,19 @@ namespace LocalModelIntegrator.Services
             if (BinaryExtensions.Contains(Path.GetExtension(path)))
                 return;
 
+            // Linked/out-of-tree items fall back to a bare filename, which can collide with a
+            // DIFFERENT file's display id - disambiguate those instead of silently dropping the
+            // file. The same physical file reached twice under one id is still listed only once.
             string display = projectName + "/" + RelativeToDir(projectDir, path);
-            if (seen.Add(display))
-                result.Add(new SolutionFileInfo(path, projectName, IsCodeFile(path), display));
+            string unique = display;
+            for (int n = 2; seen.TryGetValue(unique, out string existing); n++)
+            {
+                if (string.Equals(existing, path, StringComparison.OrdinalIgnoreCase))
+                    return; // true duplicate of an already-listed file
+                unique = display + " (" + n + ")";
+            }
+            seen[unique] = path;
+            result.Add(new SolutionFileInfo(path, projectName, IsCodeFile(path), unique));
         }
 
         /// <summary>
@@ -412,8 +422,10 @@ namespace LocalModelIntegrator.Services
                 return System.Array.Empty<SearchMatch>();
 
             // Compiling here (not inside Task.Run) surfaces an invalid pattern via the awaited task.
+            // The match timeout bounds model-supplied patterns: catastrophic backtracking would
+            // otherwise pin this thread indefinitely, and cancellation cannot interrupt one IsMatch.
             Regex regex = useRegex
-                ? new Regex(query, RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)
+                ? new Regex(query, RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2))
                 : null;
 
             IReadOnlyList<SolutionFileInfo> files = ListFiles();
@@ -446,6 +458,12 @@ namespace LocalModelIntegrator.Services
                             if (matches.Count >= maxMatches)
                                 break;
                         }
+                    }
+                    catch (RegexMatchTimeoutException)
+                    {
+                        // A pathological pattern would time out on every file - stop the whole
+                        // search and return whatever matched before the timeout.
+                        break;
                     }
                     catch { /* skip unreadable files */ }
                 }

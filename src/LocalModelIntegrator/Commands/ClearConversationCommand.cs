@@ -34,6 +34,7 @@ namespace LocalModelIntegrator.Commands
             ToolWindowPane window = _package.FindToolWindow(typeof(ToolWindows.ChatWindow), 0, false);
             if (window?.Content is ToolWindows.ChatWindowControl control)
             {
+                control.ClearConversation();
                 control.AppendMessage("system", "Conversation cleared.");
             }
         }

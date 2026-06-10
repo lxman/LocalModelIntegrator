@@ -180,26 +180,55 @@ namespace LocalModelIntegrator.Agent
                 // Echo the assistant's tool-call turn into the conversation, then answer each call.
                 messages.Add(new ChatMessage("assistant", turn.Content) { ToolCalls = turn.ToolCalls });
 
-                foreach (JToken tc in turn.ToolCalls)
+                try
                 {
-                    ct.ThrowIfCancellationRequested();
-                    string id = tc["id"]?.ToString();
-                    string name = tc["function"]?["name"]?.ToString() ?? string.Empty;
-                    string argsJson = tc["function"]?["arguments"]?.ToString();
+                    foreach (JToken tc in turn.ToolCalls)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        string id = tc["id"]?.ToString();
+                        string name = tc["function"]?["name"]?.ToString() ?? string.Empty;
+                        string argsJson = tc["function"]?["arguments"]?.ToString();
 
-                    var call = new ToolCall { Verb = name.ToLowerInvariant(), Arg = ExtractArg(argsJson), RawArgsJson = argsJson };
-                    string label = string.IsNullOrEmpty(call.Arg) ? call.Verb : call.Verb + " " + call.Arg;
+                        var call = new ToolCall { Verb = name.ToLowerInvariant(), Arg = ExtractArg(argsJson), RawArgsJson = argsJson };
+                        string label = string.IsNullOrEmpty(call.Arg) ? call.Verb : call.Verb + " " + call.Arg;
 
-                    string observation = await SafeRunToolAsync(call, ct).ConfigureAwait(false);
-                    if (_options.EnableLogging)
-                        DiagLog.Write("agent", $"tool result ({label}):\n{observation}");
+                        string observation = await SafeRunToolAsync(call, ct).ConfigureAwait(false);
+                        if (_options.EnableLogging)
+                            DiagLog.Write("agent", $"tool result ({label}):\n{observation}");
 
-                    progress.Report(new AgentUpdate(AgentUpdateKind.ToolUsed, label));
-                    messages.Add(new ChatMessage("tool", observation) { ToolCallId = id });
+                        progress.Report(new AgentUpdate(AgentUpdateKind.ToolUsed, label));
+                        messages.Add(new ChatMessage("tool", observation) { ToolCallId = id });
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Strict OpenAI-compatible servers reject a conversation in which an assistant
+                    // tool_calls turn lacks a matching tool reply, so a cancel mid-step must not
+                    // leave the persistent transcript malformed - answer the unanswered calls with
+                    // a placeholder before unwinding, or the NEXT turn would fail with a 400.
+                    BackfillCanceledToolResults(messages, turn.ToolCalls);
+                    throw;
                 }
             }
 
             ReportStepCap(progress);
+        }
+
+        // After a cancel mid-step, every tool_call the assistant opened must still get a tool reply
+        // (the messages after the assistant echo are exactly this step's tool replies, so a backward
+        // scan over the trailing "tool" messages finds the ones already answered).
+        private static void BackfillCanceledToolResults(List<ChatMessage> messages, JArray toolCalls)
+        {
+            var answered = new HashSet<string>();
+            for (int i = messages.Count - 1; i >= 0 && messages[i].Role == "tool"; i--)
+                answered.Add(messages[i].ToolCallId ?? string.Empty);
+
+            foreach (JToken tc in toolCalls)
+            {
+                string id = tc["id"]?.ToString();
+                if (!answered.Contains(id ?? string.Empty))
+                    messages.Add(new ChatMessage("tool", "(canceled by the user before this tool ran)") { ToolCallId = id });
+            }
         }
 
         private async Task<string> SafeRunToolAsync(ToolCall call, CancellationToken ct)
@@ -729,7 +758,9 @@ namespace LocalModelIntegrator.Agent
             "a type or member, do NOT conclude it is undefined or will not compile; it may be defined in a " +
             "referenced library you cannot see. When you have enough information, answer in plain prose.";
 
-        // OpenAI function-tool schemas for the native path, built once. Each tool takes one string arg.
+        // OpenAI function-tool schemas for the native path, built once. Each tool takes one string
+        // arg. The OpenAI encoding is the dialect contract for DialectRequest.ToolsJson today;
+        // when a dialect with a different tool encoding lands, this moves behind IModelDialect (D3).
         private static readonly string ToolsSchema = BuildToolsSchema();
 
         private static string BuildToolsSchema()

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -6,7 +7,10 @@ using Microsoft.VisualStudio.Shell.Interop;
 namespace LocalModelIntegrator.Services
 {
     /// <summary>
-    /// Best-effort diagnostics log. Writes go to two sinks, both fail-safe:
+    /// Best-effort diagnostics log. DEBUG BUILDS ONLY: Write is [Conditional("DEBUG")], so the
+    /// shipped Release extension never writes prompts, code, or tool output to disk or the
+    /// Output pane (the Enable Logging option is inert there). In debug builds, writes go to
+    /// two sinks, both fail-safe:
     ///   1. a VS Output pane ("Local Model Integrator") for live viewing inside VS, and
     ///   2. a file at %TEMP%\LocalModelIntegrator\diag.log so the contents can be read outside VS.
     /// The file is truncated once per process (i.e. per Exp session). Callers gate on
@@ -24,6 +28,7 @@ namespace LocalModelIntegrator.Services
         /// <summary>Absolute path of the log file (or null if it could not be created).</summary>
         public static string FilePath => LogFilePath;
 
+        [Conditional("DEBUG")]
         public static void Write(string category, string message)
         {
             string line;

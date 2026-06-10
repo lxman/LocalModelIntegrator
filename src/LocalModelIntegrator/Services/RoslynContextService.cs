@@ -76,7 +76,10 @@ namespace LocalModelIntegrator.Services
                 return "(no active file)";
 
             Solution solution = _workspace.CurrentSolution;
-            DocumentId docId = solution.GetDocumentIdsWithFilePath(filePath).FirstOrDefault();
+            // Only documents in REAL (project-file-backed) projects count: Roslyn's loose-file
+            // host (no project FilePath) also lives in CurrentSolution and must stay invisible.
+            DocumentId docId = solution.GetDocumentIdsWithFilePath(filePath)
+                .FirstOrDefault(id => !string.IsNullOrEmpty(solution.GetProject(id.ProjectId)?.FilePath));
             if (docId == null)
                 return "(file is not part of the open solution)";
 
@@ -244,6 +247,11 @@ namespace LocalModelIntegrator.Services
                         ct.ThrowIfCancellationRequested();
                         if (!rl.Location.IsInSource)
                             continue;
+                        // A loose open file can reference a solution symbol; reporting that hit
+                        // would leak the file's path and code line - skip anything that is not
+                        // in a real (project-file-backed) project.
+                        if (string.IsNullOrEmpty(rl.Document?.Project?.FilePath))
+                            continue;
                         await AddHitAsync(result, seen, isDefinition: false, rl.Location, rl.Document, ct)
                             .ConfigureAwait(false);
                         if (result.Truncated) { stop = true; break; }
@@ -304,11 +312,23 @@ namespace LocalModelIntegrator.Services
                 simple = name.Substring(dot + 1);
             }
 
-            List<ISymbol> matches = (await SymbolFinder
-                .FindSourceDeclarationsAsync(solution, simple, ignoreCase: false, ct)
-                .ConfigureAwait(false))
-                .Where(s => s.Name == simple)
-                .ToList();
+            // Search REAL (project-file-backed) projects only. Roslyn's loose/miscellaneous-files
+            // host also lives in CurrentSolution; its documents are open files that are NOT
+            // solution members and must not be reachable through symbol search or read_symbol.
+            var matches = new List<ISymbol>();
+            foreach (Project project in solution.Projects)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (string.IsNullOrEmpty(project.FilePath))
+                    continue;
+                foreach (ISymbol s in await SymbolFinder
+                    .FindSourceDeclarationsAsync(project, simple, ignoreCase: false, ct)
+                    .ConfigureAwait(false))
+                {
+                    if (s.Name == simple)
+                        matches.Add(s);
+                }
+            }
 
             if (qualifier != null && matches.Count > 0)
             {

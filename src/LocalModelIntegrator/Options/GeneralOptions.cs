@@ -1,5 +1,7 @@
+using LocalModelIntegrator.Dialects;
 using Microsoft.VisualStudio.Shell;
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace LocalModelIntegrator.Options
@@ -9,24 +11,37 @@ namespace LocalModelIntegrator.Options
     public class GeneralOptions : DialogPage
     {
         [Category("API Configuration")]
-        [DisplayName("API Protocol")]
-        [Description("Select the model provider protocol. This determines how requests are built and responses parsed.")]
-        [DefaultValue("OpenAI Compatible")]
+        [DisplayName("API Dialect")]
+        [Description("How to talk to the endpoint - request shape, streaming framing, and where the reply fields live. \"Auto (detect)\" probes the server and picks the right dialect (recommended); choose a specific one to force it.")]
+        [DefaultValue(DialectResolver.AutoId)]
         [TypeConverter(typeof(ProtocolConverter))]
-        public string Protocol { get; set; } = "OpenAI Compatible";
+        public string Protocol { get; set; } = DialectResolver.AutoId;
 
         [Category("API Configuration")]
         [DisplayName("API URL")]
-        [Description("Full API endpoint URL. Examples:\n- OpenAI: https://api.openai.com/v1/chat/completions\n- Ollama: http://localhost:11434/v1/chat/completions\n- Local vLLM: http://192.168.0.179:8000/v1/chat/completions")]
+        [Description("Full API endpoint URL - or, with the Auto dialect, just the server base (e.g. http://localhost:11434) and the path is detected. Examples:\n- Ollama: http://localhost:11434\n- Ollama native endpoint: http://localhost:11434/api/chat\n- Local vLLM: http://localhost:8000/v1/chat/completions\n- OpenAI: https://api.openai.com/v1/chat/completions")]
         [DefaultValue("http://localhost:11434/v1/chat/completions")]
         public string ApiUrl { get; set; } = "http://localhost:11434/v1/chat/completions";
 
         [Category("API Configuration")]
         [DisplayName("API Key")]
-        [Description("API authentication key/token. For local servers without auth, use any dummy value.")]
+        [Description("API authentication key/token. For local servers without auth, use any dummy value. Stored encrypted (Windows DPAPI, current user).")]
         [DefaultValue("sk-dummy")]
         [PasswordPropertyText(true)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public string ApiKey { get; set; } = "sk-dummy";
+
+        // The persisted form of the key. ApiKey itself is excluded from persistence
+        // (DesignerSerializationVisibility.Hidden), so the plaintext never reaches the settings
+        // store; DialogPage saves and loads this DPAPI-encrypted base64 value in its place.
+        // A plaintext value stored by older builds under "ApiKey" is simply no longer read -
+        // the user re-enters the key once.
+        [Browsable(false)]
+        public string ApiKeyProtected
+        {
+            get => ApiKeyProtection.Protect(ApiKey);
+            set => ApiKey = ApiKeyProtection.Unprotect(value);
+        }
 
         [Category("API Configuration")]
         [DisplayName("Model Name")]
@@ -163,13 +178,11 @@ namespace LocalModelIntegrator.Options
 
         public override StandardValuesCollection GetStandardValues(ITypeDescriptorContext context)
         {
-            return new StandardValuesCollection(new[]
-            {
-                "OpenAI Compatible",
-                "Ollama",
-                "DeepSeek vLLM",
-                "LM Studio"
-            });
+            // One source of truth: Auto plus the dialect registry drive the dropdown.
+            return new StandardValuesCollection(
+                new[] { DialectResolver.AutoId }
+                    .Concat(ModelDialectRegistry.GetNames())
+                    .ToArray());
         }
     }
 }

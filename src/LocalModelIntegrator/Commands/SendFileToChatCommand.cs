@@ -2,13 +2,16 @@ using LocalModelIntegrator.Services;
 using LocalModelIntegrator.ToolWindows;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using System;
 using System.ComponentModel.Design;
+using Task = System.Threading.Tasks.Task;
 
 namespace LocalModelIntegrator.Commands
 {
     /// <summary>
-    /// Sends the active editor file to the chat tool window as context.
+    /// Sends the active editor file to the chat tool window as reference context: shows the
+    /// window and loads the file's current content into the conversation so the model can use it.
     /// </summary>
     internal sealed class SendFileToChatCommand
     {
@@ -26,7 +29,7 @@ namespace LocalModelIntegrator.Commands
 
         public static SendFileToChatCommand Instance { get; private set; }
 
-        public static async System.Threading.Tasks.Task InitializeAsync(AsyncPackage package)
+        public static async Task InitializeAsync(AsyncPackage package)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
             var commandService = await package.GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
@@ -36,29 +39,47 @@ namespace LocalModelIntegrator.Commands
         private void Execute(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var dte = _package.GetServiceAsync(typeof(EnvDTE.DTE)).Result as EnvDTE.DTE;
-            string activeFile = dte?.ActiveDocument?.FullName;
+            _ = ExecuteAsync();
+        }
 
-            if (activeFile == null)
+        private async Task ExecuteAsync()
+        {
+            try
             {
-                System.Windows.MessageBox.Show("No active document open.", "Local Model Integrator",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
-                return;
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+                // GetGlobalService rather than blocking on GetServiceAsync(...).Result, which can
+                // deadlock the UI thread.
+                var dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                string activeFile = dte?.ActiveDocument?.FullName;
+                if (string.IsNullOrEmpty(activeFile))
+                {
+                    System.Windows.MessageBox.Show("No active document open.", "Local Model Integrator",
+                        System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                    return;
+                }
+
+                var componentModel = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
+                SolutionFileService files = componentModel?.GetService<SolutionFileService>();
+                if (files == null || !files.IsSolutionOpen() || !files.IsInScope(activeFile))
+                {
+                    System.Windows.MessageBox.Show("This file isn't part of the open solution.", "Local Model Integrator",
+                        System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                    return;
+                }
+
+                // Show the window so the confirmation (and the loaded context) is actually visible.
+                ToolWindowPane window = _package.FindToolWindow(typeof(ChatWindow), 0, true);
+                if (window?.Frame == null)
+                    return;
+                Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(((IVsWindowFrame)window.Frame).Show());
+
+                if (window.Content is ChatWindowControl control)
+                    await control.SendFileToChatAsync(activeFile);
             }
-
-            var componentModel = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
-            SolutionFileService files = componentModel?.GetService<SolutionFileService>();
-            if (files == null || !files.IsSolutionOpen() || !files.IsInScope(activeFile))
+            catch (Exception ex)
             {
-                System.Windows.MessageBox.Show("This file isn't part of the open solution.", "Local Model Integrator",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
-                return;
-            }
-
-            ToolWindowPane window = _package.FindToolWindow(typeof(ChatWindow), 0, true);
-            if (window?.Content is ChatWindowControl control)
-            {
-                control.AppendMessage("system", $"Active file: {activeFile}");
+                System.Windows.MessageBox.Show("Send File to Chat failed: " + ex.Message, "Local Model Integrator");
             }
         }
     }

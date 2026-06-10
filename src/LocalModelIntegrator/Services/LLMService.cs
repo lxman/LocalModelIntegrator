@@ -1,6 +1,6 @@
+using LocalModelIntegrator.Dialects;
 using LocalModelIntegrator.Models;
 using LocalModelIntegrator.Options;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -8,7 +8,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -39,32 +38,25 @@ namespace LocalModelIntegrator.Services
                 (uri.Scheme != "http" && uri.Scheme != "https"))
                 throw new InvalidOperationException($"Invalid API URL: {options.ApiUrl}");
 
-            // Get the protocol definition
-            ModelProtocol protocol = ModelProtocolRegistry.Get(options.Protocol);
-
-            // Build messages list
-            List<object> messagePayload = messages.Select(m => m.ToRequestBody()).ToList();
-
-            // Build request body via protocol
-            object requestBody = protocol.BuildRequestBody(new ChatCompletionRequest
+            // The dialect owns the wire format; with "Auto (detect)" it (and the exact endpoint)
+            // comes from server detection, cached per configuration.
+            DialectResolution route = await DialectResolver.ResolveAsync(options, cancellationToken);
+            IModelDialect dialect = route.Dialect;
+            string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messagePayload,
+                Messages = messages,
                 Temperature = options.Temperature,
-                MaxTokens = options.MaxTokens
+                MaxTokens = options.MaxTokens,
+                ContextWindowTokens = options.ContextWindowTokens
             });
 
-            string jsonRequest = JsonConvert.SerializeObject(requestBody);
-
             if (options.EnableLogging)
-                DiagLog.Write("request", $"POST {options.ApiUrl} [{options.Protocol} / {options.ModelName}]\n{jsonRequest}");
+                DiagLog.Write("request", $"POST {route.Endpoint} [{dialect.Id} / {options.ModelName}]\n{jsonRequest}");
 
-            var httpRequest = new HttpRequestMessage(HttpMethod.Post, options.ApiUrl);
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, route.Endpoint);
             httpRequest.Content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
-
-            // Add auth header if key is provided
-            if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                httpRequest.Headers.Add("Authorization", $"Bearer {options.ApiKey}");
+            dialect.ApplyAuth(httpRequest, options.ApiKey);
 
             using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
@@ -73,7 +65,7 @@ namespace LocalModelIntegrator.Services
 
                 try
                 {
-                    HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cts.Token);
+                    using HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cts.Token);
 
                     if (!response.IsSuccessStatusCode)
                     {
@@ -87,38 +79,14 @@ namespace LocalModelIntegrator.Services
                     string jsonResponse = await response.Content.ReadAsStringAsync();
                     if (options.EnableLogging)
                         DiagLog.Write("response", jsonResponse);
-                    JObject responseObj = JObject.Parse(jsonResponse);
 
-                    // Try each content path in order defined by the protocol
-                    var choices = responseObj["choices"] as JArray;
-                    if (choices == null || choices.Count == 0)
-                        throw new InvalidOperationException("No response choices returned from API");
-
-                    JToken message = choices[0]["message"];
-
-                    // Walk the response content paths in protocol order (content first, per the registry).
-                    foreach (string path in protocol.ResponseContentPaths)
-                    {
-                        JToken token = ResolveJsonPath(responseObj, path);
-                        if (token != null && token.Type == JTokenType.String)
-                        {
-                            string value = token.ToString();
-                            if (!string.IsNullOrWhiteSpace(value))
-                                return value.Trim();
-                        }
-                    }
-
-                    // Fallback: prefer the answer (content) over the chain-of-thought (reasoning).
-                    // A reasoning model returns BOTH; the content carries the actual answer/tool call.
-                    string directContent = message?["content"]?.ToString();
-                    if (!string.IsNullOrWhiteSpace(directContent))
-                        return directContent.Trim();
-
-                    string reasoning = message?["reasoning"]?.ToString();
-                    if (string.IsNullOrWhiteSpace(reasoning))
-                        reasoning = message?["reasoning_content"]?.ToString();
-                    if (!string.IsNullOrWhiteSpace(reasoning))
-                        return reasoning.Trim();
+                    // Prefer the answer (content) over the chain-of-thought (reasoning). A
+                    // reasoning model returns BOTH; the content carries the actual answer.
+                    LlmToolTurn turn = dialect.ParseResponse(jsonResponse);
+                    if (!string.IsNullOrWhiteSpace(turn.Content))
+                        return turn.Content.Trim();
+                    if (!string.IsNullOrWhiteSpace(turn.Reasoning))
+                        return turn.Reasoning.Trim();
 
                     throw new InvalidOperationException("Empty response from API - all content fields are null or empty.");
                 }
@@ -149,32 +117,29 @@ namespace LocalModelIntegrator.Services
                 (uri.Scheme != "http" && uri.Scheme != "https"))
                 throw new InvalidOperationException($"Invalid API URL: {options.ApiUrl}");
 
-            ModelProtocol protocol = ModelProtocolRegistry.Get(options.Protocol);
-            List<object> messagePayload = messages.Select(m => m.ToRequestBody()).ToList();
-            object requestBody = protocol.BuildRequestBody(new ChatCompletionRequest
+            DialectResolution route = await DialectResolver.ResolveAsync(options, cancellationToken);
+            IModelDialect dialect = route.Dialect;
+            string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messagePayload,
+                Messages = messages,
                 Temperature = options.Temperature,
-                MaxTokens = options.MaxTokens
+                MaxTokens = options.MaxTokens,
+                Stream = true,   // force streaming on regardless of the dialect's default
+                ContextWindowTokens = options.ContextWindowTokens
             });
 
-            // Force streaming on regardless of the protocol's default.
-            JObject body = JObject.FromObject(requestBody);
-            body["stream"] = true;
-            string jsonRequest = body.ToString(Formatting.None);
-
             if (options.EnableLogging)
-                DiagLog.Write("request (stream)", $"POST {options.ApiUrl} [{options.Protocol} / {options.ModelName}]\n{jsonRequest}");
+                DiagLog.Write("request (stream)", $"POST {route.Endpoint} [{dialect.Id} / {options.ModelName}]\n{jsonRequest}");
 
-            var httpRequest = new HttpRequestMessage(HttpMethod.Post, options.ApiUrl);
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, route.Endpoint);
             httpRequest.Content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
-            if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                httpRequest.Headers.Add("Authorization", $"Bearer {options.ApiKey}");
+            dialect.ApplyAuth(httpRequest, options.ApiKey);
 
             var answer = new StringBuilder();
             var reasoningBuffer = new StringBuilder();
             var reasoningParser = new ReasoningStreamParser();
+            IDialectStreamParser frames = dialect.CreateStreamParser();
 
             using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
@@ -200,29 +165,30 @@ namespace LocalModelIntegrator.Services
                             {
                                 cts.Token.ThrowIfCancellationRequested();
 
-                                if (line.Length == 0 || !line.StartsWith("data:"))
+                                // A frame can carry payload AND the end marker (Ollama's final
+                                // NDJSON line) - only stop on Done once a line had no payload.
+                                DialectDelta d = frames.ParseLine(line);
+                                if (d == null)
+                                {
+                                    if (frames.Done)
+                                        break;
                                     continue;
-
-                                string data = line.Substring("data:".Length).Trim();
-                                if (data == "[DONE]")
-                                    break;
-
-                                (string contentField, string reasoningField) = ParseDeltaFields(data);
+                                }
 
                                 // Reasoning delivered in a dedicated field (e.g. DeepSeek reasoning_content).
                                 // Buffer it unconditionally so we can fall back to it if no content arrives.
-                                if (!string.IsNullOrEmpty(reasoningField))
+                                if (!string.IsNullOrEmpty(d.Reasoning))
                                 {
-                                    reasoningBuffer.Append(reasoningField);
+                                    reasoningBuffer.Append(d.Reasoning);
                                     if (options.EnableReasoning)
-                                        onDelta?.Report(new StreamDelta(true, reasoningField));
+                                        onDelta?.Report(new StreamDelta(true, d.Reasoning));
                                 }
 
-                                if (string.IsNullOrEmpty(contentField))
+                                if (string.IsNullOrEmpty(d.Content))
                                     continue;
 
                                 // Split any inline <think>...</think> out of the content stream.
-                                (string content, string inlineReasoning) = reasoningParser.Push(contentField);
+                                (string content, string inlineReasoning) = reasoningParser.Push(d.Content);
 
                                 if (!string.IsNullOrEmpty(inlineReasoning))
                                 {
@@ -291,31 +257,27 @@ namespace LocalModelIntegrator.Services
                 (uri.Scheme != "http" && uri.Scheme != "https"))
                 throw new InvalidOperationException($"Invalid API URL: {options.ApiUrl}");
 
-            ModelProtocol protocol = ModelProtocolRegistry.Get(options.Protocol);
-            List<object> messagePayload = messages.Select(m => m.ToRequestBody()).ToList();
-            object requestBody = protocol.BuildRequestBody(new ChatCompletionRequest
+            DialectResolution route = await DialectResolver.ResolveAsync(options, cancellationToken);
+            IModelDialect dialect = route.Dialect;
+            string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messagePayload,
+                Messages = messages,
                 Temperature = options.Temperature,
-                MaxTokens = options.MaxTokens
+                MaxTokens = options.MaxTokens,
+                Stream = false,
+                ToolsJson = toolsJson,
+                ContextWindowTokens = options.ContextWindowTokens
             });
 
-            JObject body = JObject.FromObject(requestBody);
-            body["stream"] = false;
-            body["tools"] = JArray.Parse(toolsJson);
-            body["tool_choice"] = "auto";
-            string jsonRequest = body.ToString(Formatting.None);
-
             if (options.EnableLogging)
-                DiagLog.Write("request (tools)", $"POST {options.ApiUrl} [{options.Protocol} / {options.ModelName}]\n{jsonRequest}");
+                DiagLog.Write("request (tools)", $"POST {route.Endpoint} [{dialect.Id} / {options.ModelName}]\n{jsonRequest}");
 
-            var httpRequest = new HttpRequestMessage(HttpMethod.Post, options.ApiUrl)
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, route.Endpoint)
             {
                 Content = new StringContent(jsonRequest, Encoding.UTF8, "application/json")
             };
-            if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                httpRequest.Headers.Add("Authorization", $"Bearer {options.ApiKey}");
+            dialect.ApplyAuth(httpRequest, options.ApiKey);
 
             using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
@@ -323,7 +285,7 @@ namespace LocalModelIntegrator.Services
                     cts.CancelAfter(options.RequestTimeout);
                 try
                 {
-                    HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cts.Token);
+                    using HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cts.Token);
                     string jsonResponse = await response.Content.ReadAsStringAsync();
 
                     if (!response.IsSuccessStatusCode)
@@ -336,13 +298,7 @@ namespace LocalModelIntegrator.Services
                     if (options.EnableLogging)
                         DiagLog.Write("response (tools)", jsonResponse);
 
-                    JToken message = JObject.Parse(jsonResponse)["choices"]?[0]?["message"];
-                    return new LlmToolTurn
-                    {
-                        Content = message?["content"]?.ToString(),
-                        Reasoning = message?["reasoning_content"]?.ToString() ?? message?["reasoning"]?.ToString(),
-                        ToolCalls = message?["tool_calls"] as JArray
-                    };
+                    return dialect.ParseResponse(jsonResponse);
                 }
                 catch (OperationCanceledException) when (cts.Token.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
@@ -373,36 +329,32 @@ namespace LocalModelIntegrator.Services
                 (uri.Scheme != "http" && uri.Scheme != "https"))
                 throw new InvalidOperationException($"Invalid API URL: {options.ApiUrl}");
 
-            ModelProtocol protocol = ModelProtocolRegistry.Get(options.Protocol);
-            List<object> messagePayload = messages.Select(m => m.ToRequestBody()).ToList();
-            object requestBody = protocol.BuildRequestBody(new ChatCompletionRequest
+            DialectResolution route = await DialectResolver.ResolveAsync(options, cancellationToken);
+            IModelDialect dialect = route.Dialect;
+            string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messagePayload,
+                Messages = messages,
                 Temperature = options.Temperature,
-                MaxTokens = options.MaxTokens
+                MaxTokens = options.MaxTokens,
+                Stream = true,
+                ToolsJson = toolsJson,
+                ContextWindowTokens = options.ContextWindowTokens
             });
 
-            JObject body = JObject.FromObject(requestBody);
-            body["stream"] = true;
-            body["tools"] = JArray.Parse(toolsJson);
-            body["tool_choice"] = "auto";
-            string jsonRequest = body.ToString(Formatting.None);
-
             if (options.EnableLogging)
-                DiagLog.Write("request (tools-stream)", $"POST {options.ApiUrl} [{options.Protocol} / {options.ModelName}]\n{jsonRequest}");
+                DiagLog.Write("request (tools-stream)", $"POST {route.Endpoint} [{dialect.Id} / {options.ModelName}]\n{jsonRequest}");
 
-            var httpRequest = new HttpRequestMessage(HttpMethod.Post, options.ApiUrl)
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, route.Endpoint)
             {
                 Content = new StringContent(jsonRequest, Encoding.UTF8, "application/json")
             };
-            if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                httpRequest.Headers.Add("Authorization", $"Bearer {options.ApiKey}");
+            dialect.ApplyAuth(httpRequest, options.ApiKey);
 
             var content = new StringBuilder();
             var reasoning = new StringBuilder();
-            var toolAcc = new SortedDictionary<int, ToolCallAccumulator>();
             var inlineThink = new ReasoningStreamParser();
+            IDialectStreamParser frames = dialect.CreateStreamParser();
 
             using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
@@ -428,30 +380,29 @@ namespace LocalModelIntegrator.Services
                             while ((line = await reader.ReadLineAsync()) != null)
                             {
                                 cts.Token.ThrowIfCancellationRequested();
-                                if (line.Length == 0 || !line.StartsWith("data:"))
-                                    continue;
-                                string data = line.Substring("data:".Length).Trim();
-                                if (data == "[DONE]")
-                                    break;
 
-                                JToken delta;
-                                try { delta = JObject.Parse(data)["choices"]?[0]?["delta"]; }
-                                catch (JsonException) { continue; }
-                                if (delta == null)
-                                    continue;
-
-                                string r = delta["reasoning_content"]?.ToString() ?? delta["reasoning"]?.ToString();
-                                if (!string.IsNullOrEmpty(r))
+                                // The parser also accumulates streamed tool_call fragments
+                                // internally. A frame can carry payload AND the end marker
+                                // (Ollama's final NDJSON line) - only stop on Done once a line
+                                // had no payload.
+                                DialectDelta d = frames.ParseLine(line);
+                                if (d == null)
                                 {
-                                    reasoning.Append(r);
-                                    if (options.EnableReasoning)
-                                        onDelta?.Report(new StreamDelta(true, r));
+                                    if (frames.Done)
+                                        break;
+                                    continue;
                                 }
 
-                                string c = delta["content"]?.ToString();
-                                if (!string.IsNullOrEmpty(c))
+                                if (!string.IsNullOrEmpty(d.Reasoning))
                                 {
-                                    (string cleaned, string inlineReasoning) = inlineThink.Push(c);
+                                    reasoning.Append(d.Reasoning);
+                                    if (options.EnableReasoning)
+                                        onDelta?.Report(new StreamDelta(true, d.Reasoning));
+                                }
+
+                                if (!string.IsNullOrEmpty(d.Content))
+                                {
+                                    (string cleaned, string inlineReasoning) = inlineThink.Push(d.Content);
                                     if (!string.IsNullOrEmpty(inlineReasoning))
                                     {
                                         reasoning.Append(inlineReasoning);
@@ -460,25 +411,6 @@ namespace LocalModelIntegrator.Services
                                     }
                                     if (!string.IsNullOrEmpty(cleaned))
                                         content.Append(cleaned);
-                                }
-
-                                if (delta["tool_calls"] is JArray fragments)
-                                {
-                                    foreach (JToken frag in fragments)
-                                    {
-                                        int index = frag["index"]?.Value<int>() ?? 0;
-                                        if (!toolAcc.TryGetValue(index, out ToolCallAccumulator acc))
-                                        {
-                                            acc = new ToolCallAccumulator();
-                                            toolAcc[index] = acc;
-                                        }
-                                        string id = frag["id"]?.ToString();
-                                        if (!string.IsNullOrEmpty(id)) acc.Id = id;
-                                        string name = frag["function"]?["name"]?.ToString();
-                                        if (!string.IsNullOrEmpty(name)) acc.Name = name;
-                                        string args = frag["function"]?["arguments"]?.ToString();
-                                        if (!string.IsNullOrEmpty(args)) acc.Arguments.Append(args);
-                                    }
                                 }
                             }
                         }
@@ -492,24 +424,7 @@ namespace LocalModelIntegrator.Services
                 }
             }
 
-            JArray toolCalls = null;
-            if (toolAcc.Count > 0)
-            {
-                toolCalls = new JArray();
-                foreach (KeyValuePair<int, ToolCallAccumulator> kv in toolAcc)
-                {
-                    toolCalls.Add(new JObject
-                    {
-                        ["id"] = kv.Value.Id ?? ("call_" + kv.Key),
-                        ["type"] = "function",
-                        ["function"] = new JObject
-                        {
-                            ["name"] = kv.Value.Name ?? string.Empty,
-                            ["arguments"] = kv.Value.Arguments.ToString()
-                        }
-                    });
-                }
-            }
+            JArray toolCalls = frames.ToolCalls;
 
             if (options.EnableLogging)
                 DiagLog.Write("response (tools-stream)",
@@ -521,39 +436,6 @@ namespace LocalModelIntegrator.Services
                 Reasoning = reasoning.ToString(),
                 ToolCalls = toolCalls
             };
-        }
-
-        private sealed class ToolCallAccumulator
-        {
-            public string Id;
-            public string Name;
-            public readonly StringBuilder Arguments = new StringBuilder();
-        }
-
-        /// <summary>
-        /// Reads choices[0].delta from one SSE chunk, returning the content token and any
-        /// dedicated reasoning token (reasoning_content or reasoning). Non-JSON keep-alive
-        /// lines yield (null, null).
-        /// </summary>
-        private static (string content, string reasoning) ParseDeltaFields(string data)
-        {
-            try
-            {
-                JToken delta = JObject.Parse(data)["choices"]?[0]?["delta"];
-                if (delta == null)
-                    return (null, null);
-
-                string content = delta["content"]?.ToString();
-                string reasoning = delta["reasoning_content"]?.ToString();
-                if (string.IsNullOrEmpty(reasoning))
-                    reasoning = delta["reasoning"]?.ToString();
-
-                return (content, reasoning);
-            }
-            catch (JsonException)
-            {
-                return (null, null);
-            }
         }
 
         /// <summary>
@@ -577,7 +459,20 @@ namespace LocalModelIntegrator.Services
                 (uri.Scheme != "http" && uri.Scheme != "https"))
                 return null;
 
-            ModelProtocol protocol = ModelProtocolRegistry.Get(options.Protocol);
+            DialectResolution route;
+            try
+            {
+                route = await DialectResolver.ResolveAsync(options, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return null; // completions never disrupt typing
+            }
+            IModelDialect dialect = route.Dialect;
 
             var prompt = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(semanticContext))
@@ -592,37 +487,30 @@ namespace LocalModelIntegrator.Services
             if (suppressReasoning)
                 systemContent += " /no_think";
 
-            var messages = new List<object>
+            var messages = new List<ChatMessage>
             {
-                new { role = "system", content = systemContent },
-                new { role = "user", content = prompt.ToString() }
+                new ChatMessage("system", systemContent),
+                new ChatMessage("user", prompt.ToString())
             };
 
-            object requestBody = protocol.BuildRequestBody(new ChatCompletionRequest
+            // SuppressReasoning adds the dialect's wire-level "don't think" knobs (the /no_think
+            // appended to the system prompt above is a model-level hint, not wire format).
+            string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
                 Messages = messages,
                 Temperature = temperature,
-                MaxTokens = maxTokens
+                MaxTokens = maxTokens,
+                Stream = false,
+                SuppressReasoning = suppressReasoning,
+                ContextWindowTokens = options.ContextWindowTokens
             });
 
-            JObject body = JObject.FromObject(requestBody);
-            body["stream"] = false;
-
-            if (suppressReasoning)
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, route.Endpoint)
             {
-                // vLLM / Qwen-style chat templates: turn off "thinking" so the model emits the
-                // answer in `content` instead of spending the budget on reasoning.
-                body["chat_template_kwargs"] = new JObject { ["enable_thinking"] = false };
-                body["enable_thinking"] = false;
-            }
-
-            var httpRequest = new HttpRequestMessage(HttpMethod.Post, options.ApiUrl)
-            {
-                Content = new StringContent(body.ToString(Formatting.None), Encoding.UTF8, "application/json")
+                Content = new StringContent(jsonRequest, Encoding.UTF8, "application/json")
             };
-            if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                httpRequest.Headers.Add("Authorization", $"Bearer {options.ApiKey}");
+            dialect.ApplyAuth(httpRequest, options.ApiKey);
 
             try
             {
@@ -631,13 +519,12 @@ namespace LocalModelIntegrator.Services
                     // Completions must be snappy; cap well below the chat timeout (even when chat is unlimited).
                     cts.CancelAfter(options.RequestTimeout > 0 ? Math.Min(options.RequestTimeout, 15000) : 15000);
 
-                    HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cts.Token);
+                    using HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cts.Token);
                     if (!response.IsSuccessStatusCode)
                         return null;
 
                     string json = await response.Content.ReadAsStringAsync();
-                    string content = JObject.Parse(json)["choices"]?[0]?["message"]?["content"]?.ToString();
-                    return CleanCompletion(content);
+                    return CleanCompletion(dialect.ParseResponse(json).Content);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -648,44 +535,6 @@ namespace LocalModelIntegrator.Services
             {
                 return null;
             }
-        }
-
-        private static readonly Regex IndexSegment = new Regex(@"\[(\d+)\]", RegexOptions.Compiled);
-
-        /// <summary>
-        /// Resolves a simple JSON path like "choices[0].message.content" against a token, supporting
-        /// object keys and array indices, including combined "key[0]" segments. Returns null if any
-        /// segment is missing. (The previous splitter treated "choices[0]" as a literal key and so
-        /// never matched, which silently fell through to the reasoning field.)
-        /// </summary>
-        private static JToken ResolveJsonPath(JToken root, string path)
-        {
-            if (root == null || string.IsNullOrEmpty(path))
-                return null;
-
-            JToken current = root;
-            foreach (string segment in path.Split('.'))
-            {
-                if (current == null)
-                    return null;
-
-                int bracket = segment.IndexOf('[');
-                string key = bracket < 0 ? segment : segment.Substring(0, bracket);
-                if (key.Length > 0)
-                    current = current[key];
-
-                if (bracket >= 0)
-                {
-                    foreach (Match m in IndexSegment.Matches(segment.Substring(bracket)))
-                    {
-                        if (current is JArray arr && int.TryParse(m.Groups[1].Value, out int idx) && idx < arr.Count)
-                            current = arr[idx];
-                        else
-                            return null;
-                    }
-                }
-            }
-            return current;
         }
 
         /// <summary>Strips surrounding markdown code fences and trims a model completion.</summary>
@@ -726,33 +575,10 @@ namespace LocalModelIntegrator.Services
             return systemMessages.Concat(recentMessages).ToList();
         }
 
-        /// <summary>
-        /// Extracts file suggestions from response in ```file path="..." blocks.
-        /// </summary>
-        public List<FileSuggestion> ExtractFileSuggestions(string text)
-        {
-            var suggestions = new List<FileSuggestion>();
-            var regex = new System.Text.RegularExpressions.Regex(
-                @"```file\s+path=""([^""]+)""[\r\n]+([\s\S]*?)```",
-                System.Text.RegularExpressions.RegexOptions.Multiline);
-
-            MatchCollection matches = regex.Matches(text);
-            foreach (System.Text.RegularExpressions.Match match in matches)
-            {
-                if (match.Groups.Count >= 3)
-                {
-                    string path = match.Groups[1].Value.Trim();
-                    string content = match.Groups[2].Value;
-                    if (!string.IsNullOrEmpty(path))
-                        suggestions.Add(new FileSuggestion(path, content));
-                }
-            }
-
-            return suggestions;
-        }
     }
 
-    /// <summary>Result of a non-streaming native tool-calling turn.</summary>
+    /// <summary>One assistant turn as parsed from a reply: the content, any dedicated-channel
+    /// reasoning, and any native tool calls. Produced by the dialect's response parsing.</summary>
     public sealed class LlmToolTurn
     {
         public string Content { get; set; }

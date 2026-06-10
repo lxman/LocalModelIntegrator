@@ -2,9 +2,7 @@ using EnvDTE;
 using Microsoft;
 using Microsoft.VisualStudio.Shell;
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 
 namespace LocalModelIntegrator.Services
@@ -64,97 +62,47 @@ namespace LocalModelIntegrator.Services
             });
         }
 
-        /// <summary>
-        /// Reads a file relative to the solution directory.
-        /// </summary>
-        public async Task<string> ReadFileAsync(string relativePath)
-        {
-            string solutionDir = GetSolutionDirectory();
-            if (solutionDir == null)
-                throw new InvalidOperationException("No solution is open.");
-
-            string fullPath = Path.GetFullPath(Path.Combine(solutionDir, relativePath));
-
-            // Security: prevent path traversal outside solution
-            if (!fullPath.StartsWith(solutionDir, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"Access denied: path '{relativePath}' is outside the solution directory.");
-
-            if (!File.Exists(fullPath))
-                throw new FileNotFoundException($"File not found: {relativePath}");
-
-            return await Task.Run(() => File.ReadAllText(fullPath));
-        }
+        // The metadata below walks the whole solution tree (project count), which is far too
+        // expensive to repeat on every chat turn - it is computed once per solution and reused.
+        private WorkspaceInfo _infoCache;
+        private string _infoCacheDir;
 
         /// <summary>
-        /// Lists files in a directory relative to the solution directory.
-        /// </summary>
-        public async Task<List<FileEntry>> ListFilesAsync(string relativePath, bool recursive = false)
-        {
-            string solutionDir = GetSolutionDirectory();
-            if (solutionDir == null)
-                throw new InvalidOperationException("No solution is open.");
-
-            string dirPath = string.IsNullOrEmpty(relativePath)
-                ? solutionDir
-                : Path.GetFullPath(Path.Combine(solutionDir, relativePath));
-
-            if (!dirPath.StartsWith(solutionDir, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"Access denied: path '{relativePath}' is outside the solution directory.");
-
-            var result = new List<FileEntry>();
-            SearchOption searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-
-            await Task.Run(() =>
-            {
-                result.AddRange(Directory.GetDirectories(dirPath, "*", searchOption).Select(dir => new FileEntry { Name = Path.GetFileName(dir), FullPath = dir, Type = FileEntryType.Directory }));
-                result.AddRange(Directory.GetFiles(dirPath, "*", searchOption).Select(file => new FileEntry { Name = Path.GetFileName(file), FullPath = file, Type = FileEntryType.File }));
-            });
-
-            return result.OrderBy(e => e.Type).ThenBy(e => e.Name).ToList();
-        }
-
-        /// <summary>
-        /// Gets workspace metadata for display in chat.
+        /// Gets workspace metadata for display in chat. Computed once per solution (the values
+        /// are display-only and rarely change), not on every call.
         /// </summary>
         public async Task<WorkspaceInfo> GetWorkspaceInfoAsync()
         {
             string solutionDir = GetSolutionDirectory();
-            return await Task.Run(() =>
+            if (_infoCache != null && string.Equals(_infoCacheDir, solutionDir, StringComparison.OrdinalIgnoreCase))
+                return _infoCache;
+
+            WorkspaceInfo info = await Task.Run(() =>
             {
-                var info = new WorkspaceInfo
+                var result = new WorkspaceInfo
                 {
                     Name = GetSolutionName(),
                     Path = solutionDir ?? "(no solution)"
                 };
 
-                if (solutionDir == null) return info;
-                info.HasGit = Directory.Exists(Path.Combine(solutionDir, ".git"));
-                info.HasPackagesConfig = File.Exists(Path.Combine(solutionDir, "packages.config"));
-                info.ProjectCount = 0;
+                if (solutionDir == null) return result;
+                result.HasGit = Directory.Exists(Path.Combine(solutionDir, ".git"));
+                result.ProjectCount = 0;
 
                 // Count .csproj files
                 try
                 {
-                    info.ProjectCount = Directory.GetFiles(solutionDir, "*.csproj", SearchOption.AllDirectories).Length;
+                    result.ProjectCount = Directory.GetFiles(solutionDir, "*.csproj", SearchOption.AllDirectories).Length;
                 }
                 catch { /* ignore access errors */ }
 
-                return info;
+                return result;
             });
+
+            _infoCache = info;
+            _infoCacheDir = solutionDir;
+            return info;
         }
-    }
-
-    public class FileEntry
-    {
-        public string Name { get; set; }
-        public string FullPath { get; set; }
-        public FileEntryType Type { get; set; }
-    }
-
-    public enum FileEntryType
-    {
-        File,
-        Directory
     }
 
     public class WorkspaceInfo
@@ -162,7 +110,6 @@ namespace LocalModelIntegrator.Services
         public string Name { get; set; }
         public string Path { get; set; }
         public bool HasGit { get; set; }
-        public bool HasPackagesConfig { get; set; }
         public int ProjectCount { get; set; }
     }
 }

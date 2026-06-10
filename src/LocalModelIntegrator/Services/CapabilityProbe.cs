@@ -2,21 +2,27 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using LocalModelIntegrator.Dialects;
+using LocalModelIntegrator.Models;
 using LocalModelIntegrator.Options;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace LocalModelIntegrator.Services
 {
     /// <summary>
-    /// Interrogates an OpenAI-compatible endpoint with a few tiny requests to learn what it supports:
-    /// reachability/auth, streaming, a reasoning channel, native tool-calling, and (best-effort) the
-    /// model list. Used by the "Test Connection" button and lazily before the agent's first run.
-    /// All calls are short and best-effort; nothing here throws to the caller.
+    /// Interrogates an endpoint with a few tiny requests to learn what it supports:
+    /// reachability/auth, streaming, a reasoning channel, native tool-calling, and (best-effort)
+    /// the model list. The dialect to speak - and the exact endpoint - comes from
+    /// <see cref="DialectResolver"/> first (auto-detected or manually configured), and every
+    /// probe body/reply goes through that dialect, so the checks work for any wire format.
+    /// Used by the "Test Connection" button and lazily before the agent's first run.
+    /// All calls are short and best-effort; nothing here throws to the caller except the caller's
+    /// own cancellation (so a user's Stop is reported as a cancel, not as an unreachable endpoint).
     /// </summary>
     public static class CapabilityProbe
     {
@@ -41,15 +47,21 @@ namespace LocalModelIntegrator.Services
                 return caps;
             }
 
-            Log(options, $"probing {options.ApiUrl} [{options.Protocol} / {options.ModelName}]");
+            // Pick the dialect (and the exact endpoint) before measuring anything else.
+            DialectResolution route = await DialectResolver.ResolveAsync(options, ct).ConfigureAwait(false);
+            caps.DialectId = route.Dialect.Id;
+            caps.DialectEvidence = route.Evidence;
+            caps.ResolvedEndpoint = route.Endpoint;
 
-            await BasicChatAsync(options, caps, ct).ConfigureAwait(false);
+            Log(options, $"probing {route.Endpoint} as \"{route.Dialect.Id}\" ({route.Evidence}) [model {options.ModelName}]");
+
+            await BasicChatAsync(options, route, caps, ct).ConfigureAwait(false);
 
             if (caps.Chat)
             {
-                await StreamCheckAsync(options, caps, ct).ConfigureAwait(false);
-                await ToolsCheckAsync(options, caps, ct).ConfigureAwait(false);
-                await ModelsAsync(options, caps, ct).ConfigureAwait(false);
+                await StreamCheckAsync(options, route, caps, ct).ConfigureAwait(false);
+                await ToolsCheckAsync(options, route, caps, ct).ConfigureAwait(false);
+                await ModelsAsync(options, route, caps, ct).ConfigureAwait(false);
             }
 
             caps.Report = BuildReport(caps, options.ModelName);
@@ -59,17 +71,24 @@ namespace LocalModelIntegrator.Services
 
         // ---- individual probes ------------------------------------------------------------------
 
-        private static async Task BasicChatAsync(GeneralOptions options, ModelCapabilities caps, CancellationToken ct)
-        {
-            string body = JsonConvert.SerializeObject(new
+        private static DialectRequest ProbeRequest(GeneralOptions options, string userText, int maxTokens) =>
+            new DialectRequest
             {
-                model = options.ModelName,
-                messages = new[] { new { role = "user", content = "Reply with the single word: ready" } },
-                max_tokens = 16,
-                temperature = 0.0
-            });
+                Model = options.ModelName,
+                Messages = new List<ChatMessage> { new ChatMessage("user", userText) },
+                Temperature = 0.0,
+                MaxTokens = maxTokens,
+                Stream = false,
+                // Keep num_ctx identical to real traffic: Ollama reloads the model when it changes.
+                ContextWindowTokens = options.ContextWindowTokens
+            };
 
-            (int status, string respBody, long ms, Exception ex) = await PostAsync(options, body, stream: false, ct).ConfigureAwait(false);
+        private static async Task BasicChatAsync(GeneralOptions options, DialectResolution route,
+            ModelCapabilities caps, CancellationToken ct)
+        {
+            string body = route.Dialect.BuildRequestJson(ProbeRequest(options, "Reply with the single word: ready", 16));
+
+            (int status, string respBody, long ms, Exception ex) = await PostAsync(route, options, body, ct).ConfigureAwait(false);
             caps.LatencyMs = ms;
 
             if (ex != null)
@@ -97,14 +116,15 @@ namespace LocalModelIntegrator.Services
                 return;
             }
 
-            // Inspect the response shape for a reasoning channel.
+            // Inspect the reply (through the dialect) for a reasoning channel.
             try
             {
-                JToken msg = JObject.Parse(respBody)["choices"]?[0]?["message"];
-                string content = msg?["content"]?.ToString();
-                string reasoning = msg?["reasoning_content"]?.ToString() ?? msg?["reasoning"]?.ToString();
-                bool inlineThink = content != null && content.IndexOf("<think>", StringComparison.OrdinalIgnoreCase) >= 0;
-                caps.Reasoning = (!string.IsNullOrEmpty(reasoning) || inlineThink) ? Tristate.Yes : Tristate.No;
+                LlmToolTurn turn = route.Dialect.ParseResponse(respBody);
+                bool inlineThink = turn.Content != null &&
+                    turn.Content.IndexOf("<think>", StringComparison.OrdinalIgnoreCase) >= 0;
+                caps.Reasoning = (!string.IsNullOrEmpty(turn.Reasoning) || inlineThink)
+                    ? Tristate.Yes
+                    : Tristate.No;
             }
             catch
             {
@@ -112,70 +132,92 @@ namespace LocalModelIntegrator.Services
             }
         }
 
-        private static async Task StreamCheckAsync(GeneralOptions options, ModelCapabilities caps, CancellationToken ct)
+        private static async Task StreamCheckAsync(GeneralOptions options, DialectResolution route,
+            ModelCapabilities caps, CancellationToken ct)
         {
-            string body = JsonConvert.SerializeObject(new
-            {
-                model = options.ModelName,
-                messages = new[] { new { role = "user", content = "Reply with the single word: ready" } },
-                max_tokens = 16,
-                temperature = 0.0,
-                stream = true
-            });
+            DialectRequest req = ProbeRequest(options, "Reply with the single word: ready", 16);
+            req.Stream = true;
+            string body = route.Dialect.BuildRequestJson(req);
 
-            (int status, string respBody, long _, Exception ex) = await PostAsync(options, body, stream: true, ct).ConfigureAwait(false);
-            if (ex != null || status < 200 || status >= 300)
+            try
             {
-                caps.Streaming = Tristate.Unknown;
-                return;
-            }
-            // SSE responses are line-oriented "data: {...}" frames; a JSON object body means no streaming.
-            caps.Streaming = (respBody != null && respBody.IndexOf("data:", StringComparison.Ordinal) >= 0)
-                ? Tristate.Yes
-                : Tristate.No;
-            Log(options, "streaming: " + caps.Streaming);
-        }
-
-        private static async Task ToolsCheckAsync(GeneralOptions options, ModelCapabilities caps, CancellationToken ct)
-        {
-            string body = JsonConvert.SerializeObject(new
-            {
-                model = options.ModelName,
-                messages = new[] { new { role = "user", content = "Call the ping tool now." } },
-                max_tokens = 64,
-                temperature = 0.0,
-                tool_choice = "auto",
-                tools = new[]
+                var httpRequest = new HttpRequestMessage(HttpMethod.Post, route.Endpoint)
                 {
-                    new
+                    Content = new StringContent(body, Encoding.UTF8, "application/json")
+                };
+                route.Dialect.ApplyAuth(httpRequest, options.ApiKey);
+
+                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    cts.CancelAfter(ProbeTimeoutMs);
+                    using (HttpResponseMessage response = await _http.SendAsync(
+                        httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
                     {
-                        type = "function",
-                        function = new
+                        if (!response.IsSuccessStatusCode)
                         {
-                            name = "ping",
-                            description = "Returns pong. Call this when the user asks to ping.",
-                            parameters = new { type = "object", properties = new { } }
+                            caps.Streaming = Tristate.Unknown;
+                        }
+                        else
+                        {
+                            // A streaming reply yields a parseable frame within the first few
+                            // lines; a single non-streamed JSON body yields none.
+                            caps.Streaming = Tristate.No;
+                            IDialectStreamParser frames = route.Dialect.CreateStreamParser();
+                            using (Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                            using (var reader = new StreamReader(stream))
+                            {
+                                string line;
+                                int n = 0;
+                                while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null && n++ < 10)
+                                {
+                                    cts.Token.ThrowIfCancellationRequested();
+                                    if (frames.ParseLine(line) != null || frames.Done)
+                                    {
+                                        caps.Streaming = Tristate.Yes;
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            });
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                caps.Streaming = Tristate.Unknown;
+            }
+            Log(options, "streaming: " + caps.Streaming);
+        }
 
-            (int status, string respBody, long _, Exception ex) = await PostAsync(options, body, stream: false, ct).ConfigureAwait(false);
+        private static async Task ToolsCheckAsync(GeneralOptions options, DialectResolution route,
+            ModelCapabilities caps, CancellationToken ct)
+        {
+            DialectRequest req = ProbeRequest(options, "Call the ping tool now.", 64);
+            req.ToolsJson = PingToolJson;
+            string body = route.Dialect.BuildRequestJson(req);
+
+            (int status, string respBody, long _, Exception ex) = await PostAsync(route, options, body, ct).ConfigureAwait(false);
             if (ex != null)
             {
                 caps.NativeTools = Tristate.Unknown;
             }
             else if (status == 400 || status == 422 || status == 404 || status == 501)
             {
-                caps.NativeTools = Tristate.No;   // the `tools` parameter was rejected outright
+                caps.NativeTools = Tristate.No;   // the tools parameter was rejected outright
             }
             else if (status >= 200 && status < 300)
             {
                 try
                 {
-                    JToken toolCalls = JObject.Parse(respBody)["choices"]?[0]?["message"]?["tool_calls"];
+                    LlmToolTurn turn = route.Dialect.ParseResponse(respBody);
                     // accepted + actually called -> yes; accepted but didn't call -> can't be sure, try at runtime
-                    caps.NativeTools = (toolCalls is JArray arr && arr.Count > 0) ? Tristate.Yes : Tristate.Maybe;
+                    caps.NativeTools = (turn.ToolCalls != null && turn.ToolCalls.Count > 0)
+                        ? Tristate.Yes
+                        : Tristate.Maybe;
                 }
                 catch
                 {
@@ -189,17 +231,33 @@ namespace LocalModelIntegrator.Services
             Log(options, $"native tools: {caps.NativeTools} (HTTP {status})");
         }
 
-        private static async Task ModelsAsync(GeneralOptions options, ModelCapabilities caps, CancellationToken ct)
+        // OpenAI function-tool format - the ToolsJson contract; dialects convert if their server
+        // wants another encoding.
+        private static readonly string PingToolJson = new JArray
         {
-            string modelsUrl = DeriveModelsUrl(options.ApiUrl);
+            new JObject
+            {
+                ["type"] = "function",
+                ["function"] = new JObject
+                {
+                    ["name"] = "ping",
+                    ["description"] = "Returns pong. Call this when the user asks to ping.",
+                    ["parameters"] = new JObject { ["type"] = "object", ["properties"] = new JObject() }
+                }
+            }
+        }.ToString(Newtonsoft.Json.Formatting.None);
+
+        private static async Task ModelsAsync(GeneralOptions options, DialectResolution route,
+            ModelCapabilities caps, CancellationToken ct)
+        {
+            string modelsUrl = route.Dialect.DeriveModelsUrl(route.Endpoint);
             if (modelsUrl == null)
                 return;
 
             try
             {
                 var req = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
-                if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                    req.Headers.Add("Authorization", "Bearer " + options.ApiKey);
+                route.Dialect.ApplyAuth(req, options.ApiKey);
 
                 using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
@@ -209,90 +267,58 @@ namespace LocalModelIntegrator.Services
                         if (!resp.IsSuccessStatusCode)
                             return;
                         string b = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-                        if (JObject.Parse(b)["data"] is JArray arr)
-                        {
-                            foreach (JToken m in arr)
-                            {
-                                string id = m["id"]?.ToString();
-                                if (!string.IsNullOrEmpty(id))
-                                    caps.Models.Add(id);
-                            }
-                        }
+                        caps.Models.AddRange(route.Dialect.ParseModelList(b));
                     }
                 }
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch
             {
-                // model listing is best-effort; many servers don't implement /v1/models
+                // model listing is best-effort; many servers don't implement it
             }
         }
 
         // ---- transport --------------------------------------------------------------------------
 
         private static async Task<(int status, string body, long ms, Exception ex)> PostAsync(
-            GeneralOptions options, string json, bool stream, CancellationToken ct)
+            DialectResolution route, GeneralOptions options, string json, CancellationToken ct)
         {
             var sw = Stopwatch.StartNew();
             try
             {
-                var req = new HttpRequestMessage(HttpMethod.Post, options.ApiUrl)
+                var req = new HttpRequestMessage(HttpMethod.Post, route.Endpoint)
                 {
                     Content = new StringContent(json, Encoding.UTF8, "application/json")
                 };
-                if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                    req.Headers.Add("Authorization", "Bearer " + options.ApiKey);
+                route.Dialect.ApplyAuth(req, options.ApiKey);
 
                 using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     cts.CancelAfter(ProbeTimeoutMs);
-
-                    HttpCompletionOption mode = stream
-                        ? HttpCompletionOption.ResponseHeadersRead
-                        : HttpCompletionOption.ResponseContentRead;
-
-                    using (HttpResponseMessage resp = await _http.SendAsync(req, mode, cts.Token).ConfigureAwait(false))
+                    using (HttpResponseMessage resp = await _http.SendAsync(
+                        req, HttpCompletionOption.ResponseContentRead, cts.Token).ConfigureAwait(false))
                     {
                         int status = (int)resp.StatusCode;
-                        string body;
-                        if (stream && resp.IsSuccessStatusCode)
-                        {
-                            // Read just enough to tell SSE frames from a plain JSON body.
-                            using (Stream s = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                            using (var r = new StreamReader(s))
-                            {
-                                var sb = new StringBuilder();
-                                string line;
-                                int n = 0;
-                                while ((line = await r.ReadLineAsync().ConfigureAwait(false)) != null && n < 8)
-                                {
-                                    sb.AppendLine(line);
-                                    n++;
-                                    if (line.StartsWith("data:", StringComparison.Ordinal))
-                                        break;
-                                }
-                                body = sb.ToString();
-                            }
-                        }
-                        else
-                        {
-                            body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-                        }
+                        string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                         sw.Stop();
                         return (status, body, sw.ElapsedMilliseconds, null);
                     }
                 }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // The CALLER canceled (user hit Stop) - propagate instead of reporting the endpoint
+                // as unreachable. The probe's own internal timeout still lands in the catch below.
+                throw;
             }
             catch (Exception ex)
             {
                 sw.Stop();
                 return (0, null, sw.ElapsedMilliseconds, ex);
             }
-        }
-
-        private static string DeriveModelsUrl(string apiUrl)
-        {
-            int idx = apiUrl.IndexOf("/chat/completions", StringComparison.OrdinalIgnoreCase);
-            return idx >= 0 ? apiUrl.Substring(0, idx) + "/models" : null;
         }
 
         private static string FriendlyError(Exception ex)
@@ -306,15 +332,23 @@ namespace LocalModelIntegrator.Services
 
         private static string BuildReport(ModelCapabilities c, string model)
         {
+            string dialectLine = c.DialectId == null
+                ? null
+                : $"  dialect:      {c.DialectId} — {c.DialectEvidence}";
+
             if (!c.Reachable)
-                return "✗ Could not reach the endpoint.\n" + (c.Error ?? "");
+                return "✗ Could not reach the endpoint.\n" + (c.Error ?? "") +
+                       (dialectLine == null ? "" : "\n" + dialectLine.TrimStart());
             if (!c.AuthOk)
                 return "✗ " + (c.Error ?? "Authentication failed.");
             if (!c.Chat)
-                return "✗ " + (c.Error ?? $"Chat request failed (HTTP {c.StatusCode}).");
+                return "✗ " + (c.Error ?? $"Chat request failed (HTTP {c.StatusCode}).") +
+                       (dialectLine == null ? "" : "\n" + dialectLine.TrimStart());
 
             var sb = new StringBuilder();
             sb.AppendLine($"✓ Connected to \"{model}\"  (~{c.LatencyMs} ms)");
+            if (dialectLine != null)
+                sb.AppendLine(dialectLine);
             sb.AppendLine("  streaming:    " + Mark(c.Streaming));
             sb.AppendLine("  reasoning:    " + Mark(c.Reasoning));
             sb.AppendLine("  native tools: " + Mark(c.NativeTools));

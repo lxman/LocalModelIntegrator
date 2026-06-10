@@ -25,19 +25,6 @@
                 Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarBorderBrushKey}}"/>
     </Style>
 
-    <Style x:Key="MessageContentStyle" TargetType="TextBlock"
-           BasedOn="{StaticResource {x:Type TextBlock}}">
-        <Setter Property="TextWrapping" Value="Wrap"/>
-        <Style.Triggers>
-            <!-- Reasoning/thinking content is de-emphasized so it reads as separate from the answer. -->
-            <DataTrigger Binding="{Binding Role}" Value="thinking">
-                <Setter Property="FontStyle" Value="Italic"/>
-                <Setter Property="Foreground"
-                        Value="{DynamicResource {x:Static vsui:EnvironmentColors.CommandBarTextInactiveBrushKey}}"/>
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
-
     <!-- Read-only, borderless, transparent TextBox so message text is SELECTABLE and copyable.
          (WPF TextBlock can't select text, and TextBlock.IsTextSelectionEnabled isn't available on
          net472.) Keyed + no BasedOn so it does NOT pick up the input-box background/border above. -->

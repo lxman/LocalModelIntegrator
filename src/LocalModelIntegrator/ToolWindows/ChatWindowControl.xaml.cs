@@ -29,6 +29,10 @@ namespace LocalModelIntegrator.ToolWindows
         private bool _contextEnabled = true;
         private ModelCapabilities _lastCaps;
         private List<ChatMessage> _agentChat;   // persistent agentic-chat transcript (tools + memory)
+        // Context queued for the agent transcript (e.g. "Send File to Chat") - drained at the start
+        // of the next agent turn, after the transcript has been (re)built, so it survives the lazy
+        // first-turn construction and the stale-transcript drop on a solution change.
+        private readonly List<ChatMessage> _pendingAgentContext = new List<ChatMessage>();
         private CancellationTokenSource _activeCts;
         private bool _noSolutionNoticeShown;
         private string _agentChatSolutionId;
@@ -150,11 +154,16 @@ namespace LocalModelIntegrator.ToolWindows
                 (o.AcknowledgedEndpoints ?? string.Empty).Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries),
                 StringComparer.OrdinalIgnoreCase);
 
+        // Acks are keyed scheme://host (not bare host) so a downgrade from https to http on the
+        // same host re-prompts once - the banner's encryption claim changed. Bare-host entries
+        // recorded by older builds simply never match and get re-acknowledged once.
+        private static string AckKey(EndpointTrust t) => t.Scheme + "://" + t.Host;
+
         private bool NeedsEndpointAck()
         {
             GeneralOptions o = GetOptions();
             EndpointTrust t = EndpointTrust.Classify(o.ApiUrl);
-            return t != null && t.NeedsAck && !AckSet(o).Contains(t.Host);
+            return t != null && t.NeedsAck && !AckSet(o).Contains(AckKey(t));
         }
 
         private void RecordEndpointAck()
@@ -163,7 +172,7 @@ namespace LocalModelIntegrator.ToolWindows
             EndpointTrust t = EndpointTrust.Classify(o.ApiUrl);
             if (t == null) return;
             HashSet<string> set = AckSet(o);
-            set.Add(t.Host);
+            set.Add(AckKey(t));
             o.AcknowledgedEndpoints = string.Join(";", set);
             o.SaveSettingsToStorage();
         }
@@ -206,6 +215,7 @@ namespace LocalModelIntegrator.ToolWindows
         {
             _chatMessages.Clear();
             _agentChat = null;
+            _pendingAgentContext.Clear();
             GeneralOptions options = GetOptions();
             _chatMessages.Add(new ChatMessage("system", options.SystemPrompt));
         }
@@ -213,11 +223,31 @@ namespace LocalModelIntegrator.ToolWindows
         private void CopyButton_Click(object sender, RoutedEventArgs e)
         {
             if ((sender as Button)?.DataContext is MessageDisplay msg)
-                Clipboard.SetText(msg.Content);
+            {
+                try
+                {
+                    Clipboard.SetText(msg.Content);
+                }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    // Another process has the clipboard locked (common over RDP and with
+                    // clipboard managers) - don't let the click crash VS.
+                    SetStatus("Copy failed — clipboard is busy; try again.");
+                }
+            }
         }
 
-        private void ClearButton_Click(object sender, RoutedEventArgs e)
+        private void ClearButton_Click(object sender, RoutedEventArgs e) => ClearConversation();
+
+        /// <summary>
+        /// Clears the chat: cancels any in-flight request first (so a running turn cannot keep
+        /// streaming into the emptied display), then resets the display and both transcripts.
+        /// Shared by the Clear button and the "Clear Conversation" menu command.
+        /// </summary>
+        public void ClearConversation()
         {
+            try { _activeCts?.Cancel(); }
+            catch (ObjectDisposedException) { /* request completed between the click and the cancel */ }
             _displayMessages.Clear();
             ResetConversation();
         }
@@ -316,8 +346,18 @@ namespace LocalModelIntegrator.ToolWindows
 
         private void StopButton_Click(object sender, RoutedEventArgs e)
         {
-            _activeCts?.Cancel();
-            SetStatus("Canceling…");
+            try
+            {
+                if (_activeCts != null)
+                {
+                    _activeCts.Cancel();
+                    SetStatus("Canceling…");
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // The request completed (and its CTS was disposed) between the click and the cancel.
+            }
         }
 
         private async Task SendMessageAsync()
@@ -325,6 +365,15 @@ namespace LocalModelIntegrator.ToolWindows
             string text = InputTextBox.Text?.Trim();
             if (string.IsNullOrEmpty(text))
                 return;
+
+            // One request at a time. The input box is disabled while a request runs, but
+            // programmatic senders (editor actions, the Acknowledge button) can still get here
+            // mid-run; overlapping runs would fight over _activeCts and interleave the transcripts.
+            if (_activeCts != null)
+            {
+                AppendMessage("notice", "A request is already running — wait for it to finish or press Stop.");
+                return;
+            }
 
             UpdateEndpointChip();
 
@@ -371,7 +420,7 @@ namespace LocalModelIntegrator.ToolWindows
             try
             {
                 SetStatus("Thinking...");
-                IsEnabled = false;
+                SetBusy(true);
                 _activeCts = new CancellationTokenSource();
 
                 GeneralOptions options = GetOptions();
@@ -431,9 +480,21 @@ namespace LocalModelIntegrator.ToolWindows
                     response = await _llmService.CallLLMStreamingAsync(payload, options, progress, _activeCts.Token);
 
                     if (answerMessage != null)
+                    {
                         answerMessage.Content = response;
+                    }
                     else
+                    {
+                        // No content arrived, so the response fell back to the reasoning channel -
+                        // the thinking bubble already shows this exact text; drop the bubble rather
+                        // than display the same text twice (mirrors the agent path's de-dupe).
+                        if (reasoningMessage != null && reasoningMessage.Content?.Trim() == response)
+                        {
+                            _displayMessages.Remove(reasoningMessage);
+                            reasoningMessage = null;
+                        }
                         AppendMessage("assistant", response);
+                    }
                 }
                 else
                 {
@@ -471,7 +532,7 @@ namespace LocalModelIntegrator.ToolWindows
             {
                 _activeCts?.Dispose();
                 _activeCts = null;
-                IsEnabled = true;
+                SetBusy(false);
             }
         }
 
@@ -487,6 +548,39 @@ namespace LocalModelIntegrator.ToolWindows
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             InputTextBox.Text = prompt;
             await SendMessageAsync();
+        }
+
+        /// <summary>
+        /// Loads a solution file's current content into the conversation as reference context
+        /// (used by the "Send File to Chat" menu command). The content joins the plain-chat
+        /// history immediately and is queued for the agent transcript, which drains the queue
+        /// at the start of the next agent turn - so it reaches the model on either path.
+        /// </summary>
+        public async Task SendFileToChatAsync(string filePath)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            SolutionFileService svc = GetSolutionFileService();
+            if (svc == null || !svc.IsSolutionOpen())
+            {
+                AppendMessage("notice", "No solution is open - open a solution to send its files to chat.");
+                return;
+            }
+            if (!svc.IsInScope(filePath))
+            {
+                AppendMessage("notice", "That file isn't part of the open solution, so it can't be sent to the model.");
+                return;
+            }
+
+            string content = await svc.ReadFileAsync(filePath, 0, 0, CancellationToken.None);
+            string display = svc.ToDisplayPath(filePath);
+
+            var note = new ChatMessage("user",
+                $"For reference, here is the current content of \"{display}\":\n\n{content}");
+            _chatMessages.Add(note);
+            _pendingAgentContext.Add(note);
+
+            AppendMessage("system", $"File \"{display}\" added to the conversation context.");
         }
 
         /// <summary>
@@ -642,8 +736,12 @@ namespace LocalModelIntegrator.ToolWindows
             string content = await svc.ReadFileAsync(filePath, 0, 0, System.Threading.CancellationToken.None);
 
             AppendMessage("system", $"File \"{filePath}\":\n\n{content}");
-            _chatMessages.Add(new ChatMessage("user",
-                $"I'm showing you the content of file \"{filePath}\":\n\n{content}"));
+            var note = new ChatMessage("user",
+                $"I'm showing you the content of file \"{filePath}\":\n\n{content}");
+            _chatMessages.Add(note);
+            // Agentic chat (the default) reads _agentChat, not _chatMessages - queue the content
+            // for it too, so /read reaches the model on either path.
+            _pendingAgentContext.Add(note);
         }
 
         private async Task CommandListFilesAsync(string[] args)
@@ -1086,20 +1184,25 @@ namespace LocalModelIntegrator.ToolWindows
 
             try
             {
-                IsEnabled = false;
+                SetBusy(true);
                 _activeCts = new CancellationTokenSource();
 
-                // Probe once per config so the agent can use native tool-calling when the endpoint supports it.
-                if (_lastCaps == null || !_lastCaps.MatchesConfig(options.ApiUrl, options.ModelName, options.Protocol))
+                // Probe once per config so the agent can use native tool-calling when the endpoint
+                // supports it. Only a SUCCESSFUL probe counts as cached: a failed one (server down
+                // or mid-restart, or the user pressed Stop) is probed again on the next message, so
+                // a transient failure cannot disable agent chat for the rest of the session.
+                if (_lastCaps == null || !_lastCaps.Chat ||
+                    !_lastCaps.MatchesConfig(options.ApiUrl, options.ModelName, options.Protocol))
                 {
                     SetStatus("Checking endpoint capabilities…");
                     try { _lastCaps = await CapabilityProbe.ProbeAsync(options, _activeCts.Token); }
                     catch (OperationCanceledException) { throw; }
                     catch { _lastCaps = null; }
                 }
-                if (_lastCaps != null && !_lastCaps.Chat)
+                if (_lastCaps == null || !_lastCaps.Chat)
                 {
-                    AppendMessage("error", _lastCaps.Report);
+                    AppendMessage("error", _lastCaps?.Report
+                        ?? "Could not check the endpoint. Verify the API URL in options, or run /test.");
                     return;
                 }
 
@@ -1127,6 +1230,14 @@ namespace LocalModelIntegrator.ToolWindows
                             : new ChatMessage("system", "A file outside the open solution is active in the editor; it cannot be read."));
                 }
 
+                // Context queued before the transcript existed, or while it belonged to another
+                // solution (e.g. "Send File to Chat"), joins the conversation ahead of this message.
+                if (_pendingAgentContext.Count > 0)
+                {
+                    _agentChat.AddRange(_pendingAgentContext);
+                    _pendingAgentContext.Clear();
+                }
+
                 _agentChat.Add(new ChatMessage("user", userMessage));
 
                 SetStatus(_lastCaps != null && _lastCaps.NativeTools == Tristate.Yes
@@ -1149,7 +1260,7 @@ namespace LocalModelIntegrator.ToolWindows
                 if (reasoning != null) reasoning.IsActive = false;
                 _activeCts?.Dispose();
                 _activeCts = null;
-                IsEnabled = true;
+                SetBusy(false);
                 SetStatus("");
             }
         }
@@ -1176,7 +1287,7 @@ namespace LocalModelIntegrator.ToolWindows
 
             try
             {
-                IsEnabled = false;
+                SetBusy(true);
                 SetStatus("Testing connection…");
                 ModelCapabilities caps = await CapabilityProbe.ProbeAsync(options, CancellationToken.None);
                 _lastCaps = caps;
@@ -1189,7 +1300,7 @@ namespace LocalModelIntegrator.ToolWindows
             }
             finally
             {
-                IsEnabled = true;
+                SetBusy(false);
                 SetStatus("");
             }
         }
@@ -1246,15 +1357,14 @@ namespace LocalModelIntegrator.ToolWindows
             StatusText.Text = text;
         }
 
-        public new bool IsEnabled
+        // Busy = a request is in flight: input and Send are off, Stop is on. (Deliberately a
+        // method, not a `new IsEnabled` property - hiding UIElement.IsEnabled meant anything
+        // addressing the control as a UIElement bypassed it.)
+        private void SetBusy(bool busy)
         {
-            get => InputTextBox.IsEnabled;
-            set
-            {
-                InputTextBox.IsEnabled = value;
-                SendButton.IsEnabled = value;
-                StopButton.IsEnabled = !value;  // Stop is available exactly while a request is running
-            }
+            InputTextBox.IsEnabled = !busy;
+            SendButton.IsEnabled = !busy;
+            StopButton.IsEnabled = busy;    // Stop is available exactly while a request is running
         }
     }
 }
