@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="LocalModelIntegrator.aab45773-7865-45dc-80de-bfc8cf97357b" Version="1.0.2" Language="en-US" Publisher="Michael Jordan (lxman)"/>
+    <Identity Id="LocalModelIntegrator.aab45773-7865-45dc-80de-bfc8cf97357b" Version="1.0.3" Language="en-US" Publisher="Michael Jordan (lxman)"/>
     <DisplayName>Local Model Integrator</DisplayName>
     <Description xml:space="preserve">Chat with locally-hosted or remote AI models directly inside Visual Studio. Supports OpenAI-compatible endpoints, Ollama, and custom model APIs.</Description>
     <MoreInfo>https://github.com/lxman/LocalModelIntegrator</MoreInfo>
@@ -11,8 +11,13 @@
     <Tags>AI, LLM, Chat, Local, OpenAI, Ollama, DeepSeek</Tags>
   </Metadata>
   <Installation>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,)">
+    <!-- AnyCPU managed assembly, OS-API-only P/Invokes: one VSIX serves both architectures.
+         Upper bound capped at the next VS major; widen deliberately after testing on it. -->
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,19.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,19.0)">
+      <ProductArchitecture>arm64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
   <Dependencies>

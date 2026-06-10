@@ -12,7 +12,7 @@ namespace LocalModelIntegrator
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [InstalledProductRegistration("Local Model Integrator",
         "Chat with locally-hosted or remote AI models inside Visual Studio.",
-        "1.0.2")]
+        "1.0.3")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     [Guid(PackageGuids.PackageString)]
     [ProvideOptionPage(typeof(GeneralOptions), "Local Model Integrator", "General", 0, 0, true)]
