@@ -1,5 +1,8 @@
 # Local Model Integrator
 
+[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/michaeljordanlxman.LocalModelIntegrator?label=Visual%20Studio%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=michaeljordanlxman.LocalModelIntegrator)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/michaeljordanlxman.LocalModelIntegrator)](https://marketplace.visualstudio.com/items?itemName=michaeljordanlxman.LocalModelIntegrator)
+
 A Visual Studio 2026 extension that turns any OpenAI-compatible model — local or remote — into a **code-aware, read-only assistant** scoped strictly to your open solution.
 
 Point it at your own endpoint (Ollama, LM Studio, vLLM, or the OpenAI API). It reads only the currently-open solution, shows you exactly where your code is being sent, and suggests changes in chat for you to apply by hand. It never writes to your files.
