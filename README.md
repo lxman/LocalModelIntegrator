@@ -1,7 +1,6 @@
 # Local Model Integrator
 
-[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/michaeljordanlxman.LocalModelIntegrator?label=Visual%20Studio%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=michaeljordanlxman.LocalModelIntegrator)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/michaeljordanlxman.LocalModelIntegrator)](https://marketplace.visualstudio.com/items?itemName=michaeljordanlxman.LocalModelIntegrator)
+[![Visual Studio Marketplace](https://img.shields.io/badge/Visual%20Studio%20Marketplace-install-5C2D91)](https://marketplace.visualstudio.com/items?itemName=michaeljordanlxman.LocalModelIntegrator)
 
 A Visual Studio 2026 extension that turns any OpenAI-compatible model — local or remote — into a **code-aware, read-only assistant** scoped strictly to your open solution.
 
