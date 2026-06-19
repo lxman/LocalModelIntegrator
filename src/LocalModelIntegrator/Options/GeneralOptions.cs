@@ -141,9 +141,9 @@ namespace LocalModelIntegrator.Options
 
         [Category("Diagnostics")]
         [DisplayName("Enable Logging")]
-        [Description("If true, model requests/responses and agent tool decisions are written to the 'Local Model Integrator' Output pane (View > Output). Useful for debugging; the request body is logged but the API key is not.")]
-        [DefaultValue(true)]
-        public bool EnableLogging { get; set; } = true;
+        [Description("If true, model requests/responses and agent tool decisions are written to the 'Local Model Integrator' Output pane (View > Output) and to %TEMP%\\LocalModelIntegrator\\diag.log. WARNING: this captures the full conversation sent to and from the model - your prompts, the model's replies, the endpoint URL, and any source code the agent read. The API key is NOT logged. Review and redact anything proprietary or confidential before sharing a log. Off by default.")]
+        [DefaultValue(false)]
+        public bool EnableLogging { get; set; } = false;
 
         // Hosts the user has acknowledged sending code to (semicolon-separated). Hidden from the grid
         // but persisted, so the one-time "this endpoint leaves your machine" prompt doesn't repeat.

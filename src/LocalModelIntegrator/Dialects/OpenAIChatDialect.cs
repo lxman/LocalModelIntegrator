@@ -102,7 +102,10 @@ namespace LocalModelIntegrator.Dialects
 
         public LlmToolTurn ParseResponse(string json)
         {
-            JToken message = JObject.Parse(json)["choices"]?[0]?["message"];
+            // FirstOrDefault (not [0]): a present-but-empty "choices": [] - which OpenAI-compatible
+            // gateways DO send (role/usage/keep-alive frames) - would make JArray[0] throw
+            // ArgumentOutOfRangeException, since the null-conditional only guards a null choices.
+            JToken message = (JObject.Parse(json)["choices"] as JArray)?.FirstOrDefault()?["message"];
 
             string reasoning = message?["reasoning_content"]?.ToString();
             if (string.IsNullOrEmpty(reasoning))
@@ -171,7 +174,9 @@ namespace LocalModelIntegrator.Dialects
                 }
 
                 JToken delta;
-                try { delta = JObject.Parse(data)["choices"]?[0]?["delta"]; }
+                // FirstOrDefault, not [0]: a streamed frame with an empty "choices": [] (common
+                // first/last SSE chunk) must yield no delta, not an ArgumentOutOfRangeException.
+                try { delta = (JObject.Parse(data)["choices"] as JArray)?.FirstOrDefault()?["delta"]; }
                 catch (JsonException) { return null; }
                 if (delta == null)
                     return null;

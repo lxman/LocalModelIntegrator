@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -7,14 +6,18 @@ using Microsoft.VisualStudio.Shell.Interop;
 namespace LocalModelIntegrator.Services
 {
     /// <summary>
-    /// Best-effort diagnostics log. DEBUG BUILDS ONLY: Write is [Conditional("DEBUG")], so the
-    /// shipped Release extension never writes prompts, code, or tool output to disk or the
-    /// Output pane (the Enable Logging option is inert there). In debug builds, writes go to
-    /// two sinks, both fail-safe:
+    /// Best-effort diagnostics log, available in Release as well as Debug so end users can
+    /// capture a repro when reporting issues. It is OFF unless the user turns on the "Enable
+    /// Logging" option (default false), and every caller gates on options.EnableLogging, so
+    /// nothing is written until the user opts in. When on, writes go to two fail-safe sinks:
     ///   1. a VS Output pane ("Local Model Integrator") for live viewing inside VS, and
     ///   2. a file at %TEMP%\LocalModelIntegrator\diag.log so the contents can be read outside VS.
-    /// The file is truncated once per process (i.e. per Exp session). Callers gate on
-    /// options.EnableLogging. Writes never throw and never disrupt the extension.
+    /// The file is truncated once per process. Writes never throw and never disrupt the extension.
+    ///
+    /// Privacy: the log contains the endpoint URL and the full request/response bodies (prompts,
+    /// model output, and any code the agent read) - useful for debugging, and the reason it is
+    /// off by default. The API key is NOT logged: it travels only in the Authorization header,
+    /// which is never written here.
     /// </summary>
     public static class DiagLog
     {
@@ -28,7 +31,6 @@ namespace LocalModelIntegrator.Services
         /// <summary>Absolute path of the log file (or null if it could not be created).</summary>
         public static string FilePath => LogFilePath;
 
-        [Conditional("DEBUG")]
         public static void Write(string category, string message)
         {
             string line;
