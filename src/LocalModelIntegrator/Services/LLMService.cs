@@ -45,7 +45,7 @@ namespace LocalModelIntegrator.Services
             string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messages,
+                Messages = ChatMessageNormalizer.CoalesceSystemMessages(messages),
                 Temperature = options.Temperature,
                 MaxTokens = options.MaxTokens,
                 ContextWindowTokens = options.ContextWindowTokens
@@ -122,7 +122,7 @@ namespace LocalModelIntegrator.Services
             string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messages,
+                Messages = ChatMessageNormalizer.CoalesceSystemMessages(messages),
                 Temperature = options.Temperature,
                 MaxTokens = options.MaxTokens,
                 Stream = true,   // force streaming on regardless of the dialect's default
@@ -262,7 +262,7 @@ namespace LocalModelIntegrator.Services
             string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messages,
+                Messages = ChatMessageNormalizer.CoalesceSystemMessages(messages),
                 Temperature = options.Temperature,
                 MaxTokens = options.MaxTokens,
                 Stream = false,
@@ -334,7 +334,7 @@ namespace LocalModelIntegrator.Services
             string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messages,
+                Messages = ChatMessageNormalizer.CoalesceSystemMessages(messages),
                 Temperature = options.Temperature,
                 MaxTokens = options.MaxTokens,
                 Stream = true,
@@ -498,7 +498,7 @@ namespace LocalModelIntegrator.Services
             string jsonRequest = dialect.BuildRequestJson(new DialectRequest
             {
                 Model = options.ModelName,
-                Messages = messages,
+                Messages = ChatMessageNormalizer.CoalesceSystemMessages(messages),
                 Temperature = temperature,
                 MaxTokens = maxTokens,
                 Stream = false,
