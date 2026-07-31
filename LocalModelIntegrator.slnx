@@ -1,5 +1,8 @@
 
 <Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/LocalModelIntegrator.Tests/LocalModelIntegrator.Tests.csproj" />
+  </Folder>
   <Project Path="src\LocalModelIntegrator\LocalModelIntegrator.csproj">
     <Deploy Solution="Debug|*" />
   </Project>
