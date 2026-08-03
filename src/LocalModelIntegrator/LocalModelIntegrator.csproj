@@ -45,10 +45,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Humanizer.Core" Version="3.0.10" />
+    <PackageReference Include="MessagePack" Version="3.1.8" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.10" />
     <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.14.40264" />
     <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="17.14.40264" />
     <PackageReference Include="Microsoft.VisualStudio.Imaging" Version="17.14.40264" />
-    <PackageReference Include="Microsoft.VisualStudio.Threading" Version="17.14.15" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading" Version="18.7.23" />
     <!-- VS provides these assemblies at runtime; reference them for compile only so we
          do not bundle conflicting copies of Roslyn/MEF into the VSIX. -->
     <PackageReference Include="Microsoft.VisualStudio.ComponentModelHost" Version="17.14.106" ExcludeAssets="runtime" />
