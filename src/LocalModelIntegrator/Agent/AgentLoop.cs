@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using LocalModelIntegrator.Models;
 using LocalModelIntegrator.Options;
 using LocalModelIntegrator.Services;
+using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -515,6 +516,7 @@ namespace LocalModelIntegrator.Agent
 
         private async Task<string> RunToolAsync(ToolCall call, CancellationToken ct)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
             switch (call.Verb)
             {
                 case "list":
@@ -552,12 +554,12 @@ namespace LocalModelIntegrator.Agent
                 case "refs":
                 case "usages":
                 case "find_references":
-                    return FormatRefs(await _roslyn.FindReferencesAsync(call.Arg, ct).ConfigureAwait(false));
+                    return FormatRefs(await _roslyn.FindReferencesAsync(call.Arg, ct));
 
                 case "symbol":
                 case "def":
                 case "find_symbol":
-                    return FormatSymbols(call.Arg, await _roslyn.FindSymbolAsync(call.Arg, ct).ConfigureAwait(false));
+                    return FormatSymbols(call.Arg, await _roslyn.FindSymbolAsync(call.Arg, ct));
 
                 default:
                     return "(unknown tool '" + call.Verb +
@@ -567,6 +569,7 @@ namespace LocalModelIntegrator.Agent
 
         private string FormatList()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             IReadOnlyList<SolutionFileInfo> files = _files.ListFiles();
             if (files.Count == 0)
                 return "(no files — is a solution open?)";
@@ -598,6 +601,7 @@ namespace LocalModelIntegrator.Agent
 
         private string FormatRefs(FindReferencesResult r)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (!string.IsNullOrEmpty(r.Note))
                 return r.Note;
 
@@ -611,6 +615,7 @@ namespace LocalModelIntegrator.Agent
 
         private string FormatSymbols(string name, List<SymbolHit> hits)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (hits.Count == 0)
                 return $"(no C#/VB symbol named '{name}' found)";
 

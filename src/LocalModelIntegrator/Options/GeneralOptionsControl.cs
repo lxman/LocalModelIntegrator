@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
 using LocalModelIntegrator.Services;
+using Microsoft.VisualStudio.Shell;
 
 namespace LocalModelIntegrator.Options
 {
@@ -68,7 +69,16 @@ namespace LocalModelIntegrator.Options
         /// <summary>Re-reads the bound options into the grid (settings may have been reloaded from storage).</summary>
         public void RefreshGrid() => _grid.Refresh();
 
-        private async void TestButton_Click(object sender, EventArgs e)
+        private void TestButton_Click(object sender, EventArgs e)
+        {
+            LocalModelIntegratorPackage.Instance.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                await TestConnectionAsync();
+            }).FileAndForget("LocalModelIntegrator/TestConnection");
+        }
+
+        private async System.Threading.Tasks.Task TestConnectionAsync()
         {
             _testButton.Enabled = false;
             _resultBox.Text = "Testing connection to " + _options.ApiUrl + " …";

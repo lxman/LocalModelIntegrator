@@ -22,6 +22,7 @@ Most in-IDE AI assistants assume a specific cloud provider and send your code th
 - **Agentic, code-aware chat.** By default every message runs a tool-using loop that inspects your actual code (Roslyn find-references / symbols / outlines, content search, file read) instead of guessing.
 - **Any OpenAI-compatible model.** Native `tool_calls` when the endpoint supports them; a text-based tool protocol fallback for models that don't — so even a modest local model works.
 - **Streaming responses** with a collapsible "thinking" view.
+- **Markdown answers** with selectable headings, emphasis, lists, quotes, tables, and code blocks. The Copy button preserves the original Markdown. Web links open on click; images display their alt text without downloading remote content.
 - **Editor right-click actions:** Explain, Refactor, Generate Tests, Add Doc Comments (limited to in-solution files).
 - **Prompt history** in the input box (Ctrl+↑ / Ctrl+↓).
 - **Capability probe / Test Connection** so you know what your endpoint supports.

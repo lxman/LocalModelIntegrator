@@ -26,10 +26,21 @@
                                        Style="{StaticResource RoleLabelStyle}"
                                        VerticalAlignment="Center"/>
                         </DockPanel>
-                        <TextBox Text="{Binding Content}"
-                                 Style="{StaticResource SelectableContentStyle}"/>
+                        <Grid>
+                            <TextBox x:Name="PlainContent" Text="{Binding Content}"
+                                     Style="{StaticResource SelectableContentStyle}"/>
+                            <local:MarkdownContent x:Name="FormattedContent" Visibility="Collapsed"
+                                                   Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"/>
+                        </Grid>
                     </StackPanel>
                 </Border>
+                <DataTemplate.Triggers>
+                    <DataTrigger Binding="{Binding Role}" Value="assistant">
+                        <Setter TargetName="PlainContent" Property="Visibility" Value="Collapsed"/>
+                        <Setter TargetName="FormattedContent" Property="Visibility" Value="Visible"/>
+                        <Setter TargetName="FormattedContent" Property="Markdown" Value="{Binding Content}"/>
+                    </DataTrigger>
+                </DataTemplate.Triggers>
             </DataTemplate>
 
             <DataTemplate x:Key="ThinkingMessageTemplate">

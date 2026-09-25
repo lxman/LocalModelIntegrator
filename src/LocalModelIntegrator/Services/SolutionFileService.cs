@@ -97,6 +97,7 @@ namespace LocalModelIntegrator.Services
         /// </summary>
         public IReadOnlyList<SolutionFileInfo> ListFiles()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (_cache != null && (DateTime.UtcNow - _cacheStampUtc).TotalSeconds < 5)
                 return _cache;
 
@@ -167,6 +168,7 @@ namespace LocalModelIntegrator.Services
 
         private HashSet<string> ScopeSet()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (_scopeCache != null && (DateTime.UtcNow - _scopeStampUtc).TotalSeconds < 5)
                 return _scopeCache;
 
@@ -212,6 +214,7 @@ namespace LocalModelIntegrator.Services
         /// </summary>
         public bool IsInScope(string fullPath)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (string.IsNullOrWhiteSpace(fullPath))
                 return false;
             string c = PathScope.Canonical(fullPath);
@@ -341,6 +344,7 @@ namespace LocalModelIntegrator.Services
         /// </summary>
         public async Task<string> ReadFileAsync(string path, int startLine, int endLine, CancellationToken ct)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
             string full = ResolvePath(path, out string error);
             if (full == null)
                 return error;
@@ -396,18 +400,19 @@ namespace LocalModelIntegrator.Services
         }
 
         /// <summary>Structural outline for a C#/VB file; a note for other file types.</summary>
-        public Task<string> GetOutlineAsync(string path, CancellationToken ct)
+        public async Task<string> GetOutlineAsync(string path, CancellationToken ct)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
             string full = ResolvePath(path, out string error);
             if (full == null)
-                return Task.FromResult(error);
+                return error;
 
             string ext = Path.GetExtension(full);
             if (!string.Equals(ext, ".cs", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(ext, ".vb", StringComparison.OrdinalIgnoreCase))
-                return Task.FromResult("(no semantic outline for this file type - read it to view contents)");
+                return "(no semantic outline for this file type - read it to view contents)";
 
-            return _roslyn.GetActiveFileContextAsync(full, ct);
+            return await _roslyn.GetActiveFileContextAsync(full, ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -418,6 +423,7 @@ namespace LocalModelIntegrator.Services
         public async Task<IReadOnlyList<SearchMatch>> SearchContentAsync(
             string query, bool useRegex, CancellationToken ct, int maxMatches = 200)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
             if (string.IsNullOrEmpty(query))
                 return System.Array.Empty<SearchMatch>();
 
@@ -474,6 +480,7 @@ namespace LocalModelIntegrator.Services
         /// <summary>Maps an absolute path to its project-scoped display id (or the file name if unknown).</summary>
         public string ToDisplayPath(string fullPath)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (string.IsNullOrEmpty(fullPath))
                 return fullPath;
             SolutionFileInfo hit = ListFiles()
@@ -487,6 +494,7 @@ namespace LocalModelIntegrator.Services
         /// </summary>
         private string ResolvePath(string input, out string error)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             error = null;
             if (string.IsNullOrWhiteSpace(input))
             {
@@ -562,6 +570,7 @@ namespace LocalModelIntegrator.Services
 
         private string ReadFromDisk(string fullPath)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (!IsInScope(fullPath))
                 return "(access denied: that file is not part of the open solution)";
 

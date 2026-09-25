@@ -44,7 +44,10 @@ namespace LocalModelIntegrator.Services
                 return;
             }
 
+            // This IVsOutputWindowPane method explicitly supports background callers.
+#pragma warning disable VSTHRD010
             try { GetPane()?.OutputStringThreadSafe(line); } catch { /* pane sink best-effort */ }
+#pragma warning restore VSTHRD010
             WriteFile(line);
         }
 

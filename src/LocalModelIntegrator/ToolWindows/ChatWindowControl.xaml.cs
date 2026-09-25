@@ -93,12 +93,14 @@ namespace LocalModelIntegrator.ToolWindows
         // service; false if the service isn't composed yet, which also means no solution is loaded.
         private bool IsSolutionAvailable()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             try { return GetSolutionFileService()?.IsSolutionOpen() ?? false; }
             catch { return false; }
         }
 
         private void NotifyNoSolutionOnce()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (_noSolutionNoticeShown) return;
             _noSolutionNoticeShown = true;
             AppendMessage("notice", "No solution is open, so the model has no access to your code - " +
@@ -362,6 +364,7 @@ namespace LocalModelIntegrator.ToolWindows
 
         private async Task SendMessageAsync()
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             string text = InputTextBox.Text?.Trim();
             if (string.IsNullOrEmpty(text))
                 return;
@@ -638,6 +641,7 @@ namespace LocalModelIntegrator.ToolWindows
 
         private async Task HandleCommandAsync(string command)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             try
             {
                 string cmdLine = command.Substring(1).Trim();
@@ -811,6 +815,7 @@ namespace LocalModelIntegrator.ToolWindows
 
         private async Task CommandWorkspaceInfoAsync()
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             WorkspaceInfo info = await GetWorkspaceService().GetWorkspaceInfoAsync();
 
             string output = $"Workspace: {info.Name}\n" +
@@ -1073,6 +1078,7 @@ namespace LocalModelIntegrator.ToolWindows
 
         private async Task CommandAgentAsync(string[] args)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (args.Length == 0)
             {
                 AppendMessage("system", "Usage: /agent <goal or question>   (chat is already agentic; this is the same thing)");
@@ -1083,6 +1089,7 @@ namespace LocalModelIntegrator.ToolWindows
 
         private async Task CommandAgentContinueAsync()
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (_agentChat == null || _agentChat.Count == 0)
             {
                 AppendMessage("system", "Nothing to continue yet. Ask a question first.");
@@ -1307,6 +1314,7 @@ namespace LocalModelIntegrator.ToolWindows
 
         private void CommandCaps()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (_lastCaps == null)
             {
                 AppendMessage("system", "No capability probe yet this session. Click Test or run /test.");
@@ -1317,6 +1325,7 @@ namespace LocalModelIntegrator.ToolWindows
 
         private void CommandHelp()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             const string help = "Commands:\n\n" +
                                 "  /read <path>     - Read a solution file into context\n" +
                                 "  /readsol <path> [a-b] - Read solution file (fresh; optional line range)\n" +
@@ -1343,13 +1352,9 @@ namespace LocalModelIntegrator.ToolWindows
 
         public void AppendMessage(string role, string content)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             _displayMessages.Add(new MessageDisplay { Role = role, Content = content });
-
-            ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
-            {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                MessagesScrollViewer.ScrollToEnd();
-            });
+            MessagesScrollViewer.ScrollToEnd();
         }
 
         private void SetStatus(string text)
