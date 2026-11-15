@@ -48,21 +48,21 @@
     <PackageReference Include="Markdig" Version="1.6.0" />
     <PackageReference Include="Humanizer.Core" Version="3.0.10" />
     <PackageReference Include="MessagePack" Version="3.1.12" />
-    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.14" />
-    <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.14.40264" />
-    <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="17.14.40264" />
-    <PackageReference Include="Microsoft.VisualStudio.Imaging" Version="17.14.40264" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="11.0.0" />
+    <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="18.12.1603" />
+    <PackageReference Include="Microsoft.VisualStudio.Shell.Framework" Version="18.12.1603" />
+    <PackageReference Include="Microsoft.VisualStudio.Imaging" Version="18.12.1583" />
     <PackageReference Include="Microsoft.VisualStudio.Threading" Version="18.12.1" />
     <!-- VS provides these assemblies at runtime; reference them for compile only so we
-         do not bundle conflicting copies of Roslyn/MEF into the VSIX. -->
-    <PackageReference Include="Microsoft.VisualStudio.ComponentModelHost" Version="17.14.106" ExcludeAssets="runtime" />
+         do not bundle conflicting copies of Roslyn/MEF into the VSIX. SComponentModel/IComponentModel
+         live in Shell.Framework in 18.x. -->
     <PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="4.14.0" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.VisualStudio.Language" Version="17.14.249" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820">
+    <PackageReference Include="Microsoft.VisualStudio.Language" Version="18.12.81" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.12.1606">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="EnvDTE" Version="17.14.40260" />
+    <PackageReference Include="EnvDTE" Version="18.12.1603" />
   </ItemGroup>
 
   <ItemGroup>
